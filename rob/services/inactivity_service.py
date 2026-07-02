@@ -199,7 +199,30 @@ class InactivityService:
         )
         return {"channels_scanned": channels_scanned, "users_seen": len(latest), "users_seeded": seeded}
 
-    async def register_member_activity(self, guild: discord.Guild, member: discord.abc.User) -> None:
+    def counts_for_reactivation(
+        self, channel_id: int | None, thread_parent_id: int | None = None
+    ) -> bool:
+        """Whether activity in this channel can earn an Inactive member their
+        Active role back. When a main chat channel is configured
+        (``notice_channel_id`` — the channel the inactivity notices point
+        members to), only activity there (or in its threads) counts; with no
+        channel configured, activity anywhere counts as before."""
+
+        if self.notice_channel_id is None:
+            return True
+        return (
+            channel_id == self.notice_channel_id
+            or thread_parent_id == self.notice_channel_id
+        )
+
+    async def register_member_activity(
+        self,
+        guild: discord.Guild,
+        member: discord.abc.User,
+        *,
+        channel_id: int | None = None,
+        thread_parent_id: int | None = None,
+    ) -> None:
         """Record activity for a member and reactivate them immediately if they
         were marked inactive.
 
@@ -209,18 +232,50 @@ class InactivityService:
         handled here in real time. The common case — an already-active member —
         only does the lightweight activity write plus an in-memory role check, so
         this stays cheap on every message.
+
+        Members currently marked Inactive only earn activity credit — and their
+        Active role back — in the main chat channel (see
+        :meth:`counts_for_reactivation`); their activity elsewhere is ignored so
+        the next sweep can't reactivate them either.
         """
 
         # Discord bots are never tracked by the inactivity system.
         if getattr(member, "bot", False):
             return
+
+        roles_known = getattr(member, "roles", None) is not None
+        enabled: bool | None = None
+        settings = None
+        if roles_known and self.notice_channel_id is not None:
+            enabled = await self.is_enabled(guild.id)
+            if enabled:
+                settings = await self.guild_settings.get(guild.id)
+                if (
+                    settings is not None
+                    and settings.inactive_role_id is not None
+                    and self._has_role(member, settings.inactive_role_id)
+                    and not is_protected_user(member.id)
+                    and not self.counts_for_reactivation(channel_id, thread_parent_id)
+                ):
+                    log.debug(
+                        "Ignoring activity outside the main channel for inactive "
+                        "user_id=%s guild_id=%s channel_id=%s",
+                        member.id,
+                        guild.id,
+                        channel_id,
+                    )
+                    return
+
         await self.record_activity(guild.id, member.id)
         # Skip non-guild authors (e.g. webhook/User objects have no roles).
-        if getattr(member, "roles", None) is None:
+        if not roles_known:
             return
-        if not await self.is_enabled(guild.id):
+        if enabled is None:
+            enabled = await self.is_enabled(guild.id)
+        if not enabled:
             return
-        settings = await self.guild_settings.get(guild.id)
+        if settings is None:
+            settings = await self.guild_settings.get(guild.id)
         if settings is None:
             return
         active_role = guild.get_role(settings.active_role_id) if settings.active_role_id else None

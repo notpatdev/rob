@@ -145,7 +145,7 @@ def _service(*, bot_state, inactive_users, unverified_role_id=None, maintenance=
         kick_grace_days=overrides.get("kick_grace_days", 14),
         bootstrap_grace_days=overrides.get("bootstrap_grace_days", 21),
         final_notice_days=overrides.get("final_notice_days", 7),
-        notice_channel_id=None,
+        notice_channel_id=overrides.get("notice_channel_id"),
         maintenance=maintenance,
     )
 
@@ -410,6 +410,113 @@ def test_register_member_activity_does_not_reactivate_unverified():
     # Unverified members stay parked as inactive even when they interact.
     assert member.has(INACTIVE_ROLE_ID)
     assert not member.has(ACTIVE_ROLE_ID)
+
+
+MAIN_CHANNEL_ID = 555
+
+
+def test_inactive_member_cannot_reclaim_active_outside_main_channel():
+    bot_state = _FakeBotState()
+    inactive_users = _FakeInactiveUsers()
+    member = _FakeMember(10, roles=[_FakeRole(INACTIVE_ROLE_ID)])
+    guild = _FakeGuild(1, [member])
+    service = _service(
+        bot_state=bot_state, inactive_users=inactive_users, notice_channel_id=MAIN_CHANNEL_ID
+    )
+    _enable(service)
+
+    _run(service.register_member_activity(guild, member, channel_id=777))
+
+    # Activity elsewhere is ignored entirely: no reactivation AND no activity
+    # stamp (otherwise the next sweep would flip them back).
+    assert member.has(INACTIVE_ROLE_ID)
+    assert not member.has(ACTIVE_ROLE_ID)
+    assert bot_state.values.get("activity:1:user:10:last_active") is None
+
+
+def test_inactive_member_reclaims_active_in_main_channel():
+    bot_state = _FakeBotState()
+    inactive_users = _FakeInactiveUsers()
+    member = _FakeMember(10, roles=[_FakeRole(INACTIVE_ROLE_ID)])
+    guild = _FakeGuild(1, [member])
+    service = _service(
+        bot_state=bot_state, inactive_users=inactive_users, notice_channel_id=MAIN_CHANNEL_ID
+    )
+    _enable(service)
+
+    _run(service.register_member_activity(guild, member, channel_id=MAIN_CHANNEL_ID))
+
+    assert member.has(ACTIVE_ROLE_ID)
+    assert not member.has(INACTIVE_ROLE_ID)
+    assert bot_state.values.get("activity:1:user:10:last_active") is not None
+
+
+def test_inactive_member_reclaims_active_in_thread_of_main_channel():
+    bot_state = _FakeBotState()
+    inactive_users = _FakeInactiveUsers()
+    member = _FakeMember(10, roles=[_FakeRole(INACTIVE_ROLE_ID)])
+    guild = _FakeGuild(1, [member])
+    service = _service(
+        bot_state=bot_state, inactive_users=inactive_users, notice_channel_id=MAIN_CHANNEL_ID
+    )
+    _enable(service)
+
+    _run(
+        service.register_member_activity(
+            guild, member, channel_id=888, thread_parent_id=MAIN_CHANNEL_ID
+        )
+    )
+
+    assert member.has(ACTIVE_ROLE_ID)
+    assert not member.has(INACTIVE_ROLE_ID)
+
+
+def test_active_member_activity_still_counts_outside_main_channel():
+    bot_state = _FakeBotState()
+    inactive_users = _FakeInactiveUsers()
+    member = _FakeMember(10, roles=[_FakeRole(ACTIVE_ROLE_ID)])
+    guild = _FakeGuild(1, [member])
+    service = _service(
+        bot_state=bot_state, inactive_users=inactive_users, notice_channel_id=MAIN_CHANNEL_ID
+    )
+    _enable(service)
+
+    _run(service.register_member_activity(guild, member, channel_id=777))
+
+    # Only the Inactive -> Active transition is main-channel-gated; an Active
+    # member's activity anywhere keeps counting so they don't drift inactive.
+    assert bot_state.values.get("activity:1:user:10:last_active") is not None
+    assert member.has(ACTIVE_ROLE_ID)
+
+
+def test_no_main_channel_configured_reactivates_from_anywhere():
+    bot_state = _FakeBotState()
+    inactive_users = _FakeInactiveUsers()
+    member = _FakeMember(10, roles=[_FakeRole(INACTIVE_ROLE_ID)])
+    guild = _FakeGuild(1, [member])
+    service = _service(bot_state=bot_state, inactive_users=inactive_users)
+    _enable(service)
+
+    _run(service.register_member_activity(guild, member, channel_id=777))
+
+    assert member.has(ACTIVE_ROLE_ID)
+    assert not member.has(INACTIVE_ROLE_ID)
+
+
+def test_counts_for_reactivation_helper():
+    service = _service(
+        bot_state=_FakeBotState(),
+        inactive_users=_FakeInactiveUsers(),
+        notice_channel_id=MAIN_CHANNEL_ID,
+    )
+    assert service.counts_for_reactivation(MAIN_CHANNEL_ID)
+    assert service.counts_for_reactivation(888, MAIN_CHANNEL_ID)
+    assert not service.counts_for_reactivation(777)
+    assert not service.counts_for_reactivation(None)
+
+    unrestricted = _service(bot_state=_FakeBotState(), inactive_users=_FakeInactiveUsers())
+    assert unrestricted.counts_for_reactivation(None)
+    assert unrestricted.counts_for_reactivation(777)
 
 
 def test_register_member_activity_records_when_disabled_without_role_changes():

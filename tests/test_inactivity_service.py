@@ -471,7 +471,7 @@ def test_inactive_member_reclaims_active_in_thread_of_main_channel():
     assert not member.has(INACTIVE_ROLE_ID)
 
 
-def test_active_member_activity_still_counts_outside_main_channel():
+def test_active_member_gets_no_credit_outside_main_channel():
     bot_state = _FakeBotState()
     inactive_users = _FakeInactiveUsers()
     member = _FakeMember(10, roles=[_FakeRole(ACTIVE_ROLE_ID)])
@@ -483,10 +483,54 @@ def test_active_member_activity_still_counts_outside_main_channel():
 
     _run(service.register_member_activity(guild, member, channel_id=777))
 
-    # Only the Inactive -> Active transition is main-channel-gated; an Active
-    # member's activity anywhere keeps counting so they don't drift inactive.
+    # Active status is tracked from main only: activity elsewhere stamps
+    # nothing, so a member who never chats in main drifts inactive.
+    assert bot_state.values.get("activity:1:user:10:last_active") is None
+    assert member.has(ACTIVE_ROLE_ID)  # roles untouched by the ignored event
+
+
+def test_active_member_gets_credit_in_main_channel():
+    bot_state = _FakeBotState()
+    inactive_users = _FakeInactiveUsers()
+    member = _FakeMember(10, roles=[_FakeRole(ACTIVE_ROLE_ID)])
+    guild = _FakeGuild(1, [member])
+    service = _service(
+        bot_state=bot_state, inactive_users=inactive_users, notice_channel_id=MAIN_CHANNEL_ID
+    )
+    _enable(service)
+
+    _run(service.register_member_activity(guild, member, channel_id=MAIN_CHANNEL_ID))
+
     assert bot_state.values.get("activity:1:user:10:last_active") is not None
     assert member.has(ACTIVE_ROLE_ID)
+
+
+def test_backfill_scans_only_main_channel_when_configured():
+    bot_state = _FakeBotState()
+    now = datetime.now(timezone.utc)
+    main = _FakeHistoryChannel([_FakeHistoryMessage(10, now - timedelta(days=1))])
+    main.id = MAIN_CHANNEL_ID
+    side = _FakeHistoryChannel([_FakeHistoryMessage(11, now - timedelta(days=1))])
+    side.id = 777
+    thread_of_main = _FakeHistoryChannel([_FakeHistoryMessage(12, now - timedelta(days=1))])
+    thread_of_main.id = 888
+    thread_of_main.parent_id = MAIN_CHANNEL_ID
+    guild = SimpleNamespace(
+        id=1, me=None, text_channels=[main, side], threads=[thread_of_main], members=[]
+    )
+    service = _service(
+        bot_state=bot_state,
+        inactive_users=_FakeInactiveUsers(),
+        notice_channel_id=MAIN_CHANNEL_ID,
+    )
+
+    result = _run(service.backfill_activity_from_history(guild, days=7))
+
+    # Main + its thread scanned; the side channel is ignored.
+    assert result["channels_scanned"] == 2
+    assert _run(service.get_last_activity(1, 10)) is not None
+    assert _run(service.get_last_activity(1, 12)) is not None
+    assert _run(service.get_last_activity(1, 11)) is None
 
 
 def test_no_main_channel_configured_reactivates_from_anywhere():
@@ -503,20 +547,20 @@ def test_no_main_channel_configured_reactivates_from_anywhere():
     assert not member.has(INACTIVE_ROLE_ID)
 
 
-def test_counts_for_reactivation_helper():
+def test_counts_as_activity_helper():
     service = _service(
         bot_state=_FakeBotState(),
         inactive_users=_FakeInactiveUsers(),
         notice_channel_id=MAIN_CHANNEL_ID,
     )
-    assert service.counts_for_reactivation(MAIN_CHANNEL_ID)
-    assert service.counts_for_reactivation(888, MAIN_CHANNEL_ID)
-    assert not service.counts_for_reactivation(777)
-    assert not service.counts_for_reactivation(None)
+    assert service.counts_as_activity(MAIN_CHANNEL_ID)
+    assert service.counts_as_activity(888, MAIN_CHANNEL_ID)
+    assert not service.counts_as_activity(777)
+    assert not service.counts_as_activity(None)
 
     unrestricted = _service(bot_state=_FakeBotState(), inactive_users=_FakeInactiveUsers())
-    assert unrestricted.counts_for_reactivation(None)
-    assert unrestricted.counts_for_reactivation(777)
+    assert unrestricted.counts_as_activity(None)
+    assert unrestricted.counts_as_activity(777)
 
 
 def test_register_member_activity_records_when_disabled_without_role_changes():

@@ -152,6 +152,10 @@ class InactivityService:
         existing record), and returns a summary. Used to bootstrap activity when
         the system is first enabled on a guild so already-active members are not
         wrongly flagged inactive before live tracking has any history.
+
+        When a main chat channel is configured, only that channel (and its
+        threads) is scanned — matching live tracking, where activity elsewhere
+        doesn't count.
         """
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, days))
@@ -161,6 +165,13 @@ class InactivityService:
 
         sources: list[object] = list(getattr(guild, "text_channels", []))
         sources.extend(getattr(guild, "threads", []))
+        if self.notice_channel_id is not None:
+            sources = [
+                channel
+                for channel in sources
+                if getattr(channel, "id", None) == self.notice_channel_id
+                or getattr(channel, "parent_id", None) == self.notice_channel_id
+            ]
         for channel in sources:
             if not self._can_read_history(channel, me):
                 continue
@@ -199,14 +210,15 @@ class InactivityService:
         )
         return {"channels_scanned": channels_scanned, "users_seen": len(latest), "users_seeded": seeded}
 
-    def counts_for_reactivation(
+    def counts_as_activity(
         self, channel_id: int | None, thread_parent_id: int | None = None
     ) -> bool:
-        """Whether activity in this channel can earn an Inactive member their
-        Active role back. When a main chat channel is configured
-        (``notice_channel_id`` — the channel the inactivity notices point
-        members to), only activity there (or in its threads) counts; with no
-        channel configured, activity anywhere counts as before."""
+        """Whether an event in this channel counts as member activity at all.
+        When a main chat channel is configured (``notice_channel_id`` — the
+        channel the inactivity notices point members to), ONLY activity there
+        (or in its threads) counts; everything elsewhere in the server is
+        ignored, for staying Active and for re-claiming Active alike. With no
+        channel configured, activity anywhere counts."""
 
         if self.notice_channel_id is None:
             return True
@@ -233,49 +245,25 @@ class InactivityService:
         only does the lightweight activity write plus an in-memory role check, so
         this stays cheap on every message.
 
-        Members currently marked Inactive only earn activity credit — and their
-        Active role back — in the main chat channel (see
-        :meth:`counts_for_reactivation`); their activity elsewhere is ignored so
-        the next sweep can't reactivate them either.
+        Active status is tracked from the main chat channel only (see
+        :meth:`counts_as_activity`): events elsewhere never stamp activity, so
+        they neither keep a member Active nor bring an Inactive member back.
         """
 
         # Discord bots are never tracked by the inactivity system.
         if getattr(member, "bot", False):
             return
-
-        roles_known = getattr(member, "roles", None) is not None
-        enabled: bool | None = None
-        settings = None
-        if roles_known and self.notice_channel_id is not None:
-            enabled = await self.is_enabled(guild.id)
-            if enabled:
-                settings = await self.guild_settings.get(guild.id)
-                if (
-                    settings is not None
-                    and settings.inactive_role_id is not None
-                    and self._has_role(member, settings.inactive_role_id)
-                    and not is_protected_user(member.id)
-                    and not self.counts_for_reactivation(channel_id, thread_parent_id)
-                ):
-                    log.debug(
-                        "Ignoring activity outside the main channel for inactive "
-                        "user_id=%s guild_id=%s channel_id=%s",
-                        member.id,
-                        guild.id,
-                        channel_id,
-                    )
-                    return
+        # Activity outside the main chat channel counts for nothing.
+        if not self.counts_as_activity(channel_id, thread_parent_id):
+            return
 
         await self.record_activity(guild.id, member.id)
         # Skip non-guild authors (e.g. webhook/User objects have no roles).
-        if not roles_known:
+        if getattr(member, "roles", None) is None:
             return
-        if enabled is None:
-            enabled = await self.is_enabled(guild.id)
-        if not enabled:
+        if not await self.is_enabled(guild.id):
             return
-        if settings is None:
-            settings = await self.guild_settings.get(guild.id)
+        settings = await self.guild_settings.get(guild.id)
         if settings is None:
             return
         active_role = guild.get_role(settings.active_role_id) if settings.active_role_id else None

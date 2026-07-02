@@ -8,7 +8,8 @@ bot host and is never sent to a third-party API.
 ## `/tldr` — chat summaries
 
 Summarises recent chat in a channel, for everyone, on the main + test guilds.
-The reply is **ephemeral** (only the requester sees it).
+The reply is a **public plain-text message** (no embed/card) posted in the
+channel where the command was run; errors are shown only to the requester.
 
 ### Options
 
@@ -31,9 +32,15 @@ the user and Rob have **View Channel** + **Read Message History** first.
 2. **Natural-language summary (optional upgrade).** If a local
    [Ollama](https://ollama.com) server is reachable at `TLDR_OLLAMA_URL`, the
    selected messages are sent to a small local model (`TLDR_MODEL`) which writes
-   a bulleted TL;DR. If Ollama is unreachable, times out, or errors, Rob falls
-   back to the digest silently (and backs off from retrying for a couple of
-   minutes so a down server doesn't slow every call).
+   the TL;DR. When the window holds more chat than fits one model prompt
+   (`TLDR_TRANSCRIPT_CHAR_BUDGET`), Rob **summarises it in chronological chunks
+   and merges the partial summaries** (up to `TLDR_MAX_CHUNKS` model calls +
+   one merge call), so the summary covers the whole requested timeframe rather
+   than just its newest slice. If even that cap is exceeded, the most recent
+   chunks win and the footer says `latest X of Y messages`. If Ollama is
+   unreachable, times out, or errors, Rob falls back to the digest silently
+   (and backs off from retrying for a couple of minutes so a down server
+   doesn't slow every call).
 
 The footer of the reply shows which path produced it ("summarised by <model>
 (on-server)" vs "quick digest").
@@ -97,6 +104,7 @@ or add swap / more RAM.
 | `TLDR_NUM_PREDICT` | `300` | Max tokens the model may generate per summary. |
 | `TLDR_TRANSCRIPT_CHAR_BUDGET` | `8000` | Max chars of chat handed to the model. |
 | `TLDR_STYLE` | `paragraphs` | `paragraphs` = short narrative run-through; `bullets` = 3-6 bullet points. |
+| `TLDR_MAX_CHUNKS` | `6` | Max chunk-summary model calls for windows bigger than one prompt. |
 | `TLDR_COOLDOWN_SECONDS` | `30` | Per-user cooldown. |
 
 **Slow hosts:** on a small CPU VPS the wall-clock cost of a summary is roughly

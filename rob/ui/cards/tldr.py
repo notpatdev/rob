@@ -1,23 +1,12 @@
 from __future__ import annotations
 
-from rob.ui.components import make_card, render
-from rob.ui.render import RenderedMessage
-from rob.ui.theme import COLOR_INFO
-
-# Components V2 text blocks cap at 4000 chars; leave headroom for the truncation
-# note and card chrome.
-_BODY_BUDGET = 3800
+# Discord message content is capped at 2000 chars; the header/footer share it
+# with the summary.
+_CONTENT_LIMIT = 2000
+_TRIM_NOTE = "… *(trimmed)*"
 
 
-def _fit(text: str, budget: int = _BODY_BUDGET) -> str:
-    text = text.strip()
-    if len(text) <= budget:
-        return text
-    note = "\n\n… summary trimmed to fit."
-    return text[: budget - len(note)].rstrip() + note
-
-
-def tldr_card(
+def tldr_message(
     *,
     channel_name: str,
     timeframe_label: str,
@@ -29,7 +18,13 @@ def tldr_card(
     matched_count: int | None = None,
     model: str | None = None,
     ai_message_count: int | None = None,
-) -> RenderedMessage:
+) -> str:
+    """Plain-text /tldr reply (public, no embed/card)."""
+
+    header = f"## 🧾 TL;DR — #{channel_name} · {timeframe_label}"
+    if topic:
+        header += f' · "{topic}"'
+
     if method == "ai" and model:
         engine = f"summarised by {model} (on-server)"
     else:
@@ -48,22 +43,13 @@ def tldr_card(
     else:
         count_bit = f"{message_count} {msgs}"
     footer_bits = [count_bit, f"{participant_count} {people}", engine]
-    footer = " · ".join(footer_bits)
+    if topic and matched_count is not None:
+        match_word = "match" if matched_count == 1 else "matches"
+        footer_bits.insert(0, f"{matched_count} {match_word}")
+    footer = "-# " + " · ".join(footer_bits)
 
-    eyebrow = "🧾 TL;DR"
-    if topic:
-        eyebrow = f"🧾 TL;DR · {topic}"
-        if matched_count is not None:
-            match_word = "match" if matched_count == 1 else "matches"
-            footer = f"{matched_count} {match_word} · {footer}"
-
-    return render(
-        make_card(
-            title=f"#{channel_name} · {timeframe_label}",
-            body=_fit(summary) or "Nothing to summarise.",
-            color=COLOR_INFO,
-            variant="status",
-            eyebrow=eyebrow,
-            footer=footer,
-        )
-    )
+    body = summary.strip() or "Nothing to summarise."
+    budget = _CONTENT_LIMIT - len(header) - len(footer) - 2  # two newlines
+    if len(body) > budget:
+        body = body[: budget - len(_TRIM_NOTE)].rstrip() + _TRIM_NOTE
+    return f"{header}\n{body}\n{footer}"

@@ -68,6 +68,7 @@ class BotSettings(BaseSettings):
     tldr_num_predict: int
     tldr_transcript_char_budget: int
     tldr_style: str
+    tldr_max_chunks: int
     tldr_cooldown_seconds: int
     # Voice-message speech-to-text. Uses a local faster-whisper model; disabled
     # until the operator installs faster-whisper and flips the flag on.
@@ -305,6 +306,7 @@ def load_bot_settings(env_file: str | Path | None = None) -> BotSettings:
             "TLDR_TRANSCRIPT_CHAR_BUDGET", 8000, minimum=200
         ),
         tldr_style=_env_choice("TLDR_STYLE", "paragraphs", {"paragraphs", "bullets"}),
+        tldr_max_chunks=_env_int("TLDR_MAX_CHUNKS", 6, minimum=1),
         tldr_cooldown_seconds=_env_int("TLDR_COOLDOWN_SECONDS", 30, minimum=0),
         voice_transcribe_enabled=_env_bool("VOICE_TRANSCRIBE_ENABLED", False),
         voice_transcribe_model=_env_str("VOICE_TRANSCRIBE_MODEL", "base"),

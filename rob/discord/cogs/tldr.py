@@ -12,7 +12,7 @@ from discord.ext import commands
 from rob.config.guilds import MAIN_GUILD_ID, TEST_GUILD_ID
 from rob.services.tldr_service import ChatMessage
 from rob.ui.cards.errors import error_card
-from rob.ui.cards.tldr import tldr_card
+from rob.ui.cards.tldr import tldr_message
 from rob.utils.time import utc_now
 
 if TYPE_CHECKING:
@@ -168,22 +168,22 @@ class TldrCog(commands.Cog):
         label, delta = _TIMEFRAMES.get(key, _TIMEFRAMES[_DEFAULT_TIMEFRAME])
         after = utc_now() - delta
 
-        await interaction.response.defer(ephemeral=True)
+        # The summary is posted publicly, so the "thinking…" state is public too.
+        await interaction.response.defer()
         self._mark_cooldown(interaction.user.id)
 
         try:
             messages = await self._collect_messages(target, after)
         except discord.Forbidden:
-            await interaction.followup.send(
-                **error_card("Rob isn't allowed to read that channel's history.").send_kwargs(),
-                ephemeral=True,
+            await self._fail_after_defer(
+                interaction, error_card("Rob isn't allowed to read that channel's history.")
             )
             return
         except discord.HTTPException:
             log.warning("Failed to fetch history for /tldr.", exc_info=True)
-            await interaction.followup.send(
-                **error_card("Rob couldn't fetch that channel's history right now.").send_kwargs(),
-                ephemeral=True,
+            await self._fail_after_defer(
+                interaction,
+                error_card("Rob couldn't fetch that channel's history right now."),
             )
             return
 
@@ -198,13 +198,12 @@ class TldrCog(commands.Cog):
             # The interaction is already deferred, so always give feedback rather
             # than leaving the user on a permanent "thinking…" state.
             log.exception("Failed to summarise chat for /tldr.")
-            await interaction.followup.send(
-                **error_card("Rob couldn't put together a summary right now.").send_kwargs(),
-                ephemeral=True,
+            await self._fail_after_defer(
+                interaction, error_card("Rob couldn't put together a summary right now.")
             )
             return
 
-        card = tldr_card(
+        content = tldr_message(
             channel_name=target.name,
             timeframe_label=label,
             summary=result.summary,
@@ -217,7 +216,15 @@ class TldrCog(commands.Cog):
             ai_message_count=result.ai_message_count,
         )
         await interaction.followup.send(
-            **card.send_kwargs(),
-            ephemeral=True,
+            content=content,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+
+    async def _fail_after_defer(self, interaction: discord.Interaction, card) -> None:
+        """Errors shouldn't be broadcast: remove the public "thinking…" message
+        and tell only the requester what went wrong."""
+        try:
+            await interaction.delete_original_response()
+        except discord.HTTPException:  # pragma: no cover - best-effort cleanup
+            pass
+        await interaction.followup.send(**card.send_kwargs(), ephemeral=True)

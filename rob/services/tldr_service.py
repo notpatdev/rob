@@ -119,6 +119,7 @@ class TldrService:
         num_predict: int = 300,
         transcript_char_budget: int = _AI_TRANSCRIPT_CHAR_BUDGET,
         style: str = "paragraphs",
+        max_chunks: int = 6,
         session_factory=None,
     ) -> None:
         self.enabled = enabled
@@ -137,6 +138,10 @@ class TldrService:
         # "paragraphs" (default): a short narrative run-through of the chat.
         # "bullets": the classic 3-6 bullet-point TL;DR.
         self.style = style if style in {"paragraphs", "bullets"} else "paragraphs"
+        # When a window exceeds one transcript budget, it's summarised in chunks
+        # and merged (map-reduce). Each chunk is one model call, so this caps
+        # worst-case latency; beyond it the most recent chunks win.
+        self.max_chunks = max(1, max_chunks)
         # Injectable for tests; when None, _make_session builds a real aiohttp
         # session per request.
         self._session_factory = session_factory
@@ -298,6 +303,102 @@ class TldrService:
     def _trip_ollama_breaker(self) -> None:
         self._ollama_disabled_until = time.monotonic() + _OLLAMA_BACKOFF_SECONDS
 
+    def _focus_instruction(self, topic: str | None) -> str:
+        if not topic:
+            return ""
+        return (
+            f'Focus ONLY on anything related to the topic "{topic}". '
+            "If the chat does not discuss it, say so in one sentence.\n"
+        )
+
+    def _style_instruction(self) -> str:
+        if self.style == "bullets":
+            return (
+                "Use 3-6 concise bullet points, each starting with '- '. Summarise "
+                "what was discussed and any decisions or outcomes."
+            )
+        return (
+            "Write 1-3 short paragraphs of plain prose — a quick run-through of "
+            "what people talked about, any decisions or plans that came out of "
+            "it, and how the conversation wrapped up. Do not use bullet points, "
+            "numbered lists, or headings."
+        )
+
+    def _chunk_transcripts(self, messages: list[ChatMessage]) -> list[tuple[str, int]]:
+        """Split the chat into chronological transcripts that each fit the
+        model's budget. Returns ``[(transcript, message_count), …]``."""
+        budget = self.transcript_char_budget
+        chunks: list[tuple[str, int]] = []
+        lines: list[str] = []
+        used = 0
+        count = 0
+        for message in messages:
+            author = _clean(message.author) or "someone"
+            text = _clean(message.content)
+            if not text:
+                continue
+            line = f"{author}: {text}"
+            if len(line) > budget:
+                line = line[:budget]
+            if lines and used + len(line) + 1 > budget:
+                chunks.append(("\n".join(lines), count))
+                lines, used, count = [], 0, 0
+            lines.append(line)
+            used += len(line) + 1
+            count += 1
+        if lines:
+            chunks.append(("\n".join(lines), count))
+        return chunks
+
+    def _final_prompt(
+        self, transcript: str, *, topic: str | None, timeframe_label: str, channel_name: str
+    ) -> str:
+        return (
+            "You are Rob, a Discord assistant. Write a short, neutral TL;DR of the "
+            f"chat from #{channel_name} ({timeframe_label}).\n"
+            f"{self._focus_instruction(topic)}"
+            f"{self._style_instruction()} Only include things that are clearly stated in "
+            "the transcript — if you are not sure about a detail or who said it, "
+            "leave it out. Do not add a preamble, do not invent details, and never "
+            "use @ mentions. If the chat is only small talk, say that briefly.\n\n"
+            "Chat transcript:\n"
+            f"{transcript}\n\n"
+            "TL;DR:"
+        )
+
+    def _chunk_prompt(
+        self, transcript: str, index: int, total: int, *, topic: str | None, channel_name: str
+    ) -> str:
+        return (
+            f"You are Rob, a Discord assistant. Below is part {index} of {total} of a "
+            f"chat from #{channel_name}.\n"
+            f"{self._focus_instruction(topic)}"
+            "Summarise this part in 2-4 short sentences of plain prose. Only include "
+            "things that are clearly stated in the transcript — if you are not sure "
+            "about a detail or who said it, leave it out. Do not add a preamble and "
+            "never use @ mentions.\n\n"
+            "Chat transcript:\n"
+            f"{transcript}\n\n"
+            "Summary:"
+        )
+
+    def _combine_prompt(
+        self, partials: list[str], *, topic: str | None, timeframe_label: str, channel_name: str
+    ) -> str:
+        partial_block = "\n\n".join(
+            f"Part {i}: {part}" for i, part in enumerate(partials, 1)
+        )
+        return (
+            "You are Rob, a Discord assistant. Below are chronological partial "
+            f"summaries of the chat from #{channel_name} ({timeframe_label}).\n"
+            f"{self._focus_instruction(topic)}"
+            f"Merge them into ONE final TL;DR. {self._style_instruction()} Do not "
+            "add a preamble, do not invent details, and never use @ mentions.\n\n"
+            "Partial summaries:\n"
+            f"{partial_block}\n\n"
+            "TL;DR:"
+        )
+
     def _build_prompt(
         self,
         messages: list[ChatMessage],
@@ -306,9 +407,8 @@ class TldrService:
         timeframe_label: str,
         channel_name: str,
     ) -> tuple[str, int]:
-        """Build the model prompt. Returns ``(prompt, included_count)`` — how
-        many messages actually fit the transcript budget, so the reply can be
-        honest when a busy window was truncated."""
+        """Single-call prompt from the most recent messages that fit the budget.
+        Returns ``(prompt, included_count)``."""
         lines: list[str] = []
         used = 0
         # Keep the most recent messages that fit the budget, then restore order.
@@ -324,36 +424,8 @@ class TldrService:
             used += len(line) + 1
         lines.reverse()
         transcript = "\n".join(lines)
-
-        focus = (
-            f'Focus ONLY on anything related to the topic "{topic}". '
-            "If the chat does not discuss it, say so in one sentence.\n"
-            if topic
-            else ""
-        )
-        if self.style == "bullets":
-            style_instruction = (
-                "Use 3-6 concise bullet points, each starting with '- '. Summarise "
-                "what was discussed and any decisions or outcomes."
-            )
-        else:
-            style_instruction = (
-                "Write 1-3 short paragraphs of plain prose — a quick run-through of "
-                "what people talked about, any decisions or plans that came out of "
-                "it, and how the conversation wrapped up. Do not use bullet points, "
-                "numbered lists, or headings."
-            )
-        prompt = (
-            "You are Rob, a Discord assistant. Write a short, neutral TL;DR of the "
-            f"chat from #{channel_name} ({timeframe_label}).\n"
-            f"{focus}"
-            f"{style_instruction} Only include things that are clearly stated in "
-            "the transcript — if you are not sure about a detail or who said it, "
-            "leave it out. Do not add a preamble, do not invent details, and never "
-            "use @ mentions. If the chat is only small talk, say that briefly.\n\n"
-            "Chat transcript:\n"
-            f"{transcript}\n\n"
-            "TL;DR:"
+        prompt = self._final_prompt(
+            transcript, topic=topic, timeframe_label=timeframe_label, channel_name=channel_name
         )
         return prompt, len(lines)
 
@@ -365,9 +437,50 @@ class TldrService:
         timeframe_label: str,
         channel_name: str,
     ) -> tuple[str, int] | None:
-        prompt, included = self._build_prompt(
-            messages, topic=topic, timeframe_label=timeframe_label, channel_name=channel_name
+        chunks = self._chunk_transcripts(messages)
+
+        if len(chunks) <= 1:
+            prompt, included = self._build_prompt(
+                messages, topic=topic, timeframe_label=timeframe_label, channel_name=channel_name
+            )
+            summary = await self._generate(prompt)
+            if summary is None:
+                return None
+            return summary, included
+
+        # Map-reduce: the window doesn't fit one prompt, so summarise each chunk
+        # and merge the partials — the TL;DR then covers the whole timeframe
+        # instead of just its newest slice.
+        if len(chunks) > self.max_chunks:
+            log.info(
+                "/tldr window has %s chunks; summarising the most recent %s.",
+                len(chunks),
+                self.max_chunks,
+            )
+            chunks = chunks[-self.max_chunks :]
+        included = sum(count for _, count in chunks)
+        partials: list[str] = []
+        for index, (transcript, _count) in enumerate(chunks, 1):
+            partial = await self._generate(
+                self._chunk_prompt(
+                    transcript, index, len(chunks), topic=topic, channel_name=channel_name
+                )
+            )
+            if partial is None:
+                return None
+            partials.append(partial)
+        summary = await self._generate(
+            self._combine_prompt(
+                partials, topic=topic, timeframe_label=timeframe_label, channel_name=channel_name
+            )
         )
+        if summary is None:
+            return None
+        return summary, included
+
+    async def _generate(self, prompt: str) -> str | None:
+        """One Ollama generate call. Returns the cleaned text, or ``None`` on any
+        failure (breaker tripped, fallback expected)."""
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -424,9 +537,7 @@ class TldrService:
             self.model,
         )
         summary = _clean_summary(text)
-        if not summary:
-            return None
-        return summary, included
+        return summary or None
 
     # -- Extractive digest -------------------------------------------------
 

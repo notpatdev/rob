@@ -63,12 +63,19 @@ def _channel(name="general", user_perms=None, bot_perms=None):
 def _interaction(*, channel, guild_id=1, user_id=10):
     user = MagicMock(spec=discord.Member)
     user.id = user_id
+    deleted = []
+
+    async def _delete_original_response():
+        deleted.append(True)
+
     return SimpleNamespace(
         user=user,
         guild=SimpleNamespace(id=guild_id, get_member=lambda _id: user),
         channel=channel,
         response=_Response(),
         followup=_Followup(),
+        delete_original_response=_delete_original_response,
+        deleted_original=deleted,
     )
 
 
@@ -155,7 +162,7 @@ def test_bot_without_read_access_is_refused():
     assert not interaction.response.deferred
 
 
-def test_success_defaults_to_24h_and_sends_ephemeral_card():
+def test_success_defaults_to_24h_and_sends_public_plain_message():
     from rob.services.tldr_service import ChatMessage
     from datetime import datetime, timezone
 
@@ -169,11 +176,34 @@ def test_success_defaults_to_24h_and_sends_ephemeral_card():
     assert interaction.response.deferred
     assert interaction.followup.messages
     sent = interaction.followup.messages[0]
-    assert sent["ephemeral"] is True
-    assert "view" in sent
+    # Public, plain-text reply: no ephemeral flag, no card/view/embed.
+    assert sent.get("ephemeral") is not True
+    assert "view" not in sent and "embeds" not in sent
+    assert "a summary" in sent["content"]
     assert isinstance(sent["allowed_mentions"], discord.AllowedMentions)
     # Default timeframe applied
     assert _bot.last_call["timeframe_label"] == "the last 24 hours"
+
+
+def test_summarize_failure_after_defer_removes_public_thinking_and_errors_privately():
+    from rob.services.tldr_service import ChatMessage
+    from datetime import datetime, timezone
+
+    msgs = [ChatMessage("A", "hello world this is a message", datetime.now(timezone.utc))]
+
+    async def _boom(messages, *, topic, timeframe_label, channel_name):
+        raise RuntimeError("summariser exploded")
+
+    bot = SimpleNamespace(settings=_settings(), tldr_service=SimpleNamespace(summarize=_boom))
+    cog = _cog(bot, messages=msgs)
+    interaction = _interaction(channel=_channel())
+
+    asyncio.run(TldrCog.tldr.callback(cog, interaction))
+
+    assert interaction.response.deferred
+    assert interaction.deleted_original  # public "thinking…" removed
+    assert interaction.followup.messages
+    assert interaction.followup.messages[0]["ephemeral"] is True
 
 
 def test_topic_and_timeframe_choice_passed_through():

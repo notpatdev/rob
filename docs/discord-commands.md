@@ -7,7 +7,7 @@
 - `/leaderboard`
 - `/achievements`
 - `/report`
-- `/tldr` (options: `timeframe`, `topic`, `channel`; summarises recent chat, ephemeral reply — see [`tldr-and-voice-transcription.md`](tldr-and-voice-transcription.md))
+- `/tldr` (options: `timeframe`, `topic`, `channel`; summarises recent chat as a public plain-text reply — see [`tldr-and-voice-transcription.md`](tldr-and-voice-transcription.md))
 
 ## Dom/me commands
 

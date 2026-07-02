@@ -148,10 +148,10 @@ def test_ollama_success_returns_ai_summary():
     assert session.calls and session.calls[0][0].endswith("/api/generate")
 
 
-def test_tldr_card_footer_is_honest_about_truncated_transcript():
-    from rob.ui.cards.tldr import tldr_card
+def test_tldr_message_footer_is_honest_about_truncated_transcript():
+    from rob.ui.cards.tldr import tldr_message
 
-    card = tldr_card(
+    content = tldr_message(
         channel_name="main-chat",
         timeframe_label="the last 7 days",
         summary="a recap",
@@ -161,19 +161,97 @@ def test_tldr_card_footer_is_honest_about_truncated_transcript():
         model="qwen2.5:0.5b",
         ai_message_count=72,
     )
-    assert card.view is not None  # renders; footer content checked via repr walk
-    texts = []
+    assert "latest 72 of 390 messages" in content
+    assert "#main-chat" in content
+    assert "a recap" in content
 
-    def _walk(item):
-        for child in getattr(item, "children", []) or []:
-            content = getattr(child, "content", None)
-            if content:
-                texts.append(content)
-            _walk(child)
 
-    _walk(card.view)
-    joined = " ".join(texts)
-    assert "latest 72 of 390 messages" in joined
+def test_tldr_message_fits_discord_content_limit():
+    from rob.ui.cards.tldr import tldr_message
+
+    content = tldr_message(
+        channel_name="general",
+        timeframe_label="the last 24 hours",
+        summary="long text " * 500,
+        method="ai",
+        message_count=50,
+        participant_count=5,
+        model="qwen2.5:0.5b",
+        ai_message_count=50,
+    )
+    assert len(content) <= 2000
+    assert "trimmed" in content
+
+
+def test_chunk_transcripts_splits_chronologically():
+    from datetime import datetime, timezone
+    from rob.services.tldr_service import ChatMessage
+
+    msgs = [
+        ChatMessage(f"User{i}", f"message number {i} " + "x" * 60, datetime.now(timezone.utc))
+        for i in range(30)
+    ]
+    svc = TldrService(enabled=True, ollama_url="http://127.0.0.1:11434", transcript_char_budget=400)
+    chunks = svc._chunk_transcripts(msgs)
+    assert len(chunks) > 1
+    assert sum(count for _, count in chunks) == 30
+    # Chronological: the first chunk holds the oldest messages.
+    assert "message number 0" in chunks[0][0]
+    assert "message number 29" in chunks[-1][0]
+
+
+def test_multi_chunk_window_is_map_reduced_and_covers_all_messages():
+    from datetime import datetime, timezone
+    from rob.services.tldr_service import ChatMessage
+
+    msgs = [
+        ChatMessage(f"User{i}", f"message number {i} " + "x" * 60, datetime.now(timezone.utc))
+        for i in range(30)
+    ]
+    session = _FakeSession(response=_FakeOllamaResponse(200, {"response": "a partial or final summary"}))
+    svc = TldrService(
+        enabled=True,
+        ollama_url="http://127.0.0.1:11434",
+        transcript_char_budget=400,
+        max_chunks=20,  # high enough that no chunk is dropped in this test
+        session_factory=lambda: session,
+    )
+    result = _run(
+        svc.summarize(msgs, topic=None, timeframe_label="the last 7 days", channel_name="general")
+    )
+    assert result.method == "ai"
+    # Every message was covered, not just the newest budget's worth.
+    assert result.ai_message_count == 30
+    chunk_count = len(svc._chunk_transcripts(msgs))
+    # One call per chunk plus the final combine call.
+    assert len(session.calls) == chunk_count + 1
+    # The combine call merges the partial summaries.
+    assert "Partial summaries:" in session.calls[-1][1]["prompt"]
+
+
+def test_max_chunks_caps_latency_and_keeps_most_recent():
+    from datetime import datetime, timezone
+    from rob.services.tldr_service import ChatMessage
+
+    msgs = [
+        ChatMessage(f"User{i}", f"message number {i} " + "x" * 60, datetime.now(timezone.utc))
+        for i in range(30)
+    ]
+    session = _FakeSession(response=_FakeOllamaResponse(200, {"response": "summary"}))
+    svc = TldrService(
+        enabled=True,
+        ollama_url="http://127.0.0.1:11434",
+        transcript_char_budget=400,
+        max_chunks=2,
+        session_factory=lambda: session,
+    )
+    result = _run(
+        svc.summarize(msgs, topic=None, timeframe_label="the last 7 days", channel_name="general")
+    )
+    assert len(session.calls) == 3  # 2 chunks + combine
+    assert result.ai_message_count < 30  # honesty: only the most recent chunks
+    # The most recent messages are what survived the cap.
+    assert "message number 29" in session.calls[1][1]["prompt"]
 
 
 def test_ollama_connection_error_falls_back_to_digest_and_trips_breaker():

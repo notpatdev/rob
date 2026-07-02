@@ -42,11 +42,11 @@ sweep to react to a state change:
 - **Talking / interacting** (message, reaction, slash/button use): activity is
   stamped, and a member who was marked inactive is restored to **Active**
   immediately. When `INACTIVITY_NOTICE_CHANNEL_ID` is set (the main chat
-  channel the notices point members to), an **Inactive** member can only
-  re-claim Active by being active **in that channel** (or its threads) — their
-  activity elsewhere is ignored entirely, so the sweep can't reactivate them
-  either. Active members' activity counts anywhere, as before. Leave the
-  channel unset to let activity anywhere reactivate.
+  channel the notices point members to), Active status is tracked **from that
+  channel only** (threads under it count): activity anywhere else in the server
+  stamps nothing — it neither keeps a member Active nor brings an Inactive
+  member back, and the bootstrap history backfill likewise scans only that
+  channel. Leave the channel unset to count activity anywhere.
 - **Going unverified** (gains `unverified_role_id`): parked **Inactive**
   immediately (Active off, no countdown).
 - **Becoming verified** (loses `unverified_role_id`) and **joining**: set to the

@@ -82,12 +82,10 @@ class ActivityTrackerCog(commands.Cog):
                 thread_parent_id=thread_parent_id,
             )
         elif payload.user_id and is_new_system_guild(payload.guild_id):
-            # Uncached reactor: we can't check their roles here, so only record
-            # the raw activity signal when the channel would count for
-            # reactivation — otherwise an inactive member could earn credit
-            # outside the main channel and get flipped back at the next sweep.
+            # Uncached reactor: record the raw activity signal, but only when
+            # the channel counts as activity at all (main chat when configured).
             service = self._service()
-            if service is not None and service.counts_for_reactivation(
+            if service is not None and service.counts_as_activity(
                 payload.channel_id, thread_parent_id
             ):
                 try:

@@ -56,20 +56,6 @@ class WebhookSettings(BaseSettings):
 class BotSettings(BaseSettings):
     discord_token: str
     bot_name: str
-    # TL;DR (/tldr) chat summariser. The extractive digest always works; when an
-    # Ollama server is reachable at tldr_ollama_url a small local model turns it
-    # into a natural-language summary (no chat data ever leaves the host).
-    tldr_enabled: bool
-    tldr_ollama_url: str | None
-    tldr_model: str
-    tldr_request_timeout_seconds: int
-    tldr_keep_alive: str
-    tldr_max_messages: int
-    tldr_num_predict: int
-    tldr_transcript_char_budget: int
-    tldr_style: str
-    tldr_max_chunks: int
-    tldr_cooldown_seconds: int
     # Voice-message speech-to-text. Uses a local faster-whisper model; disabled
     # until the operator installs faster-whisper and flips the flag on.
     voice_transcribe_enabled: bool
@@ -141,15 +127,6 @@ def _env_optional_int(name: str) -> int | None:
         return int(raw)
     except ValueError as exc:
         raise RuntimeError(f"Environment variable {name} must be an integer.") from exc
-
-
-def _env_choice(name: str, default: str, allowed: set[str]) -> str:
-    value = _env_str(name, default).strip().lower()
-    if value not in allowed:
-        raise RuntimeError(
-            f"Environment variable {name} must be one of: {', '.join(sorted(allowed))}."
-        )
-    return value
 
 
 def _env_lower_csv(name: str, default: str) -> tuple[str, ...]:
@@ -295,19 +272,6 @@ def load_bot_settings(env_file: str | Path | None = None) -> BotSettings:
         server_backup_major_change_threshold=base.server_backup_major_change_threshold,
         discord_token=_env_str("DISCORD_TOKEN", required=True),
         bot_name=_env_str("BOT_NAME", "Rob"),
-        tldr_enabled=_env_bool("TLDR_ENABLED", True),
-        tldr_ollama_url=_env_str("TLDR_OLLAMA_URL", "http://127.0.0.1:11434") or None,
-        tldr_model=_env_str("TLDR_MODEL", "llama3.2:1b"),
-        tldr_request_timeout_seconds=_env_int("TLDR_REQUEST_TIMEOUT_SECONDS", 120, minimum=1),
-        tldr_keep_alive=_env_str("TLDR_KEEP_ALIVE", "-1m"),
-        tldr_max_messages=_env_int("TLDR_MAX_MESSAGES", 400, minimum=1),
-        tldr_num_predict=_env_int("TLDR_NUM_PREDICT", 300, minimum=1),
-        tldr_transcript_char_budget=_env_int(
-            "TLDR_TRANSCRIPT_CHAR_BUDGET", 8000, minimum=200
-        ),
-        tldr_style=_env_choice("TLDR_STYLE", "paragraphs", {"paragraphs", "bullets"}),
-        tldr_max_chunks=_env_int("TLDR_MAX_CHUNKS", 6, minimum=1),
-        tldr_cooldown_seconds=_env_int("TLDR_COOLDOWN_SECONDS", 30, minimum=0),
         voice_transcribe_enabled=_env_bool("VOICE_TRANSCRIBE_ENABLED", False),
         voice_transcribe_model=_env_str("VOICE_TRANSCRIBE_MODEL", "base"),
         voice_transcribe_device=_env_str("VOICE_TRANSCRIBE_DEVICE", "cpu"),

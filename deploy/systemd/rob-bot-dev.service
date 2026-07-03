@@ -1,8 +1,6 @@
 [Unit]
 Description=Rob Dev Discord Bot Service
-# ollama.service ordering is a hint for hosts running the local TL;DR model;
-# harmless on hosts without Ollama installed.
-After=network.target ollama.service
+After=network.target
 
 [Service]
 Type=simple

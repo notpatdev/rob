@@ -7,7 +7,6 @@
 - `/leaderboard`
 - `/achievements`
 - `/report`
-- `/tldr` (options: `timeframe`, `topic`, `channel`; summarises recent chat as a public plain-text reply — see [`tldr-and-voice-transcription.md`](tldr-and-voice-transcription.md))
 
 ## Dom/me commands
 
@@ -43,7 +42,7 @@
 - Voice-message transcription: when `VOICE_TRANSCRIBE_ENABLED=true`, Rob replies
   to every voice message (without pinging) with a transcript; replying to an
   older voice message while @mentioning Rob transcribes it on demand. See
-  [`tldr-and-voice-transcription.md`](tldr-and-voice-transcription.md).
+  [`voice-transcription.md`](voice-transcription.md).
 
 ## Notes
 

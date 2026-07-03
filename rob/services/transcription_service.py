@@ -94,7 +94,7 @@ class TranscriptionService:
                     hint = (
                         " The model cache directory is not writable by the bot "
                         "user — set VOICE_TRANSCRIBE_DOWNLOAD_ROOT to a directory "
-                        "the bot owns (see docs/tldr-and-voice-transcription.md)."
+                        "the bot owns (see docs/voice-transcription.md)."
                     )
                 log.exception(
                     "Failed to load Whisper model %s; retrying in %ss.%s",

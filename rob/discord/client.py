@@ -37,7 +37,6 @@ from rob.discord.cogs.reports import ReportsCog
 from rob.discord.cogs.sends import SendsCog
 from rob.discord.cogs.server_backup import ServerBackupCog
 from rob.discord.cogs.settings import SettingsCog
-from rob.discord.cogs.tldr import TldrCog
 from rob.discord.cogs.voice_transcription import VoiceTranscriptionCog
 from rob.discord.cogs.warn_relay import WarnRelayCog
 from rob.services.counting_service import CountingService
@@ -52,7 +51,6 @@ from rob.services.send_queue_service import SendQueueService
 from rob.services.send_service import SendService
 from rob.services.server_backup_service import ServerBackupService
 from rob.services.throne_service import ThroneService
-from rob.services.tldr_service import TldrService
 from rob.services.transcription_service import TranscriptionService
 from rob.ui.cards.maintenance import rob_offline_embed
 
@@ -196,18 +194,6 @@ class RobBot(commands.Bot):
             port=self.settings.rob_ops_port,
             secret=self.settings.rob_ops_secret,
         )
-        self.tldr_service = TldrService(
-            enabled=self.settings.tldr_enabled,
-            ollama_url=self.settings.tldr_ollama_url,
-            model=self.settings.tldr_model,
-            request_timeout_seconds=self.settings.tldr_request_timeout_seconds,
-            keep_alive=self.settings.tldr_keep_alive,
-            max_messages=self.settings.tldr_max_messages,
-            num_predict=self.settings.tldr_num_predict,
-            transcript_char_budget=self.settings.tldr_transcript_char_budget,
-            style=self.settings.tldr_style,
-            max_chunks=self.settings.tldr_max_chunks,
-        )
         self.transcription_service = TranscriptionService(
             enabled=self.settings.voice_transcribe_enabled,
             model=self.settings.voice_transcribe_model,
@@ -233,7 +219,6 @@ class RobBot(commands.Bot):
         await self.add_cog(InactivityCog(self))
         await self.add_cog(ServerBackupCog(self))
         await self.add_cog(ProtectedCog(self))
-        await self.add_cog(TldrCog(self))
         await self.add_cog(VoiceTranscriptionCog(self))
 
         self.tree.interaction_check = self._global_interaction_check
@@ -252,8 +237,6 @@ class RobBot(commands.Bot):
         await self.counting_service.start()
         await self.send_queue_service.start()
         await self.bot_ops_server.start()
-        # Warm the TL;DR model so the first /tldr skips the cold start; no-op without Ollama.
-        self.tldr_service.begin_warm_up()
 
     async def _global_interaction_check(
         self,
@@ -301,8 +284,6 @@ class RobBot(commands.Bot):
         log.info("%s is online as %s.", self.settings.bot_name, self.user)
 
     async def close(self) -> None:
-        if hasattr(self, "tldr_service"):
-            await self.tldr_service.stop()
         if hasattr(self, "bot_ops_server"):
             await self.bot_ops_server.stop()
         if hasattr(self, "send_queue_service"):

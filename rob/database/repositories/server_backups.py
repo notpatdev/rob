@@ -1,13 +1,7 @@
 """Hourly server-backup snapshots and major-change approvals.
 
-``server_backups`` holds JSONB snapshots of a guild's structure (roles,
-channels, server settings). ``server_backup_approvals`` tracks a pending "major
-change" that has paused backups until enough moderators approve it; on approval
-the pending snapshot is promoted to a new baseline backup.
-
-JSONB columns are read back from asyncpg as text (no custom codec is
-registered), so this module serialises with ``json.dumps`` on write and parses
-with ``json.loads`` on read.
+asyncpg returns JSONB columns as text (no custom codec registered), so this
+module serialises with json.dumps on write and parses with json.loads on read.
 """
 
 from __future__ import annotations
@@ -223,10 +217,8 @@ class ServerBackupsRepository:
         approval_id: int,
         baseline_backup_id: int,
     ) -> ServerBackupApproval | None:
-        """Record the baseline backup produced for an already-decided approval.
-
-        Used after an approval is atomically finalized: the winner of the
-        finalize transition creates the baseline backup and links it here.
+        """Record the baseline backup for an already-decided approval. The
+        winner of the atomic finalize transition creates it and links it here.
         """
 
         async with self.database.acquire() as connection:

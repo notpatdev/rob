@@ -234,9 +234,8 @@ def test_non_usd_throne_send_is_converted_to_usd_with_original_metadata():
 
 
 def test_unsupported_currency_throne_send_is_recorded_as_ignored_not_dropped():
-    # An unknown currency must not crash the webhook handler (which would 500
-    # and make Throne retry forever) nor silently drop the send. It is recorded
-    # as ``ignored`` with the original amount/currency preserved.
+    # An unknown currency must not 500 the webhook handler (Throne would retry
+    # forever) or silently drop the send; it is recorded as ignored.
     sends = _FakeSendsRepo()
     subs = _FakeSubsRepo()
     service = SendService(
@@ -331,9 +330,8 @@ def _record_manual_send(service: SendService, **overrides):
 
 
 def test_manual_send_with_user_mention_links_to_user():
-    # A Dom/me picked a real member from the @-autocomplete, so the free-text
-    # sub arrives as "<@555>". It must be attributed to that user instead of
-    # being stored verbatim and rendered as "@User with no nickname claimed".
+    # A sub picked from the @-autocomplete arrives as free text "<@555>"; it
+    # must attribute to that user, not render as "@User with no nickname claimed".
     sends = _FakeSendsRepo()
     subs = _FakeSubsRepo(sub_by_user_id=None)
     service = SendService(sends=sends, subs=subs, maintenance=_FakeMaintenance())
@@ -374,8 +372,8 @@ def test_manual_send_mention_to_registered_sub_uses_registered_send_name():
 
 
 def test_manual_send_explicit_sub_user_id_keeps_provided_display_name():
-    # The slash command resolves the mentioned member's display name and passes
-    # it alongside an explicit sub_user_id; the provided name is preserved.
+    # The slash command passes the resolved display name alongside an explicit
+    # sub_user_id.
     sends = _FakeSendsRepo()
     sub = type("Sub", (), {"id": 9, "discord_user_id": 555, "send_name": "kitten"})
     subs = _FakeSubsRepo(sub_by_user_id=sub)

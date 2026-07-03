@@ -40,7 +40,6 @@ class ProtectedCog(commands.Cog):
                 style=discord.ButtonStyle.link,
             ),
         )
-        # Remove the invoking "!protected" message so only the card remains.
         try:
             await ctx.message.delete()
         except discord.HTTPException:

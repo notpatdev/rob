@@ -71,7 +71,7 @@ class ServerBackupCog(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def run_once(self, guild: discord.Guild) -> BackupCycleResult:
-        """Run a single backup cycle now (used by ``rob backup run``)."""
+        """Run a single backup cycle now (used by rob backup run)."""
 
         result = await self.bot.server_backup_service.run_cycle(guild)
         await self._handle_cycle_result(guild, result)

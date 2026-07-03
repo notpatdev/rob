@@ -11,13 +11,11 @@ def collapse_whitespace(value: str) -> str:
 
 
 def parse_user_mention(value: str | None) -> int | None:
-    """Return the Discord user id if ``value`` is exactly a user mention.
+    """Return the Discord user id if value is exactly a user mention.
 
-    Discord substitutes a raw ``<@123>`` (or legacy ``<@!123>``) token when
-    someone picks a member from the @-autocomplete inside a free-text
-    slash-command field. Such a value is a link to that user, not a nickname,
-    so callers should attribute the send to the user instead of storing the
-    raw token as a sending name.
+    Discord inserts <@123> (or legacy <@!123>) when someone picks a member
+    from the @-autocomplete in a free-text slash-command field; attribute the
+    send to that user rather than storing the raw token as a name.
     """
 
     if not value:

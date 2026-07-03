@@ -28,7 +28,6 @@ def test_sync_pushes_main_and_test_guild_commands_then_global():
 
     asyncio.run(RobBot._sync_application_commands(fake_bot))
 
-    # Two guild syncs (main + test) followed by the global sync (guild=None).
     assert [getattr(guild, "id", None) for guild in tree.sync_calls] == [
         MAIN_GUILD_ID,
         TEST_GUILD_ID,

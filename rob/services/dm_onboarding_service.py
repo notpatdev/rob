@@ -1,12 +1,7 @@
-"""Orchestrates the DM-based Throne onboarding flow for the test guild.
+"""DM-based Throne onboarding flow for the test guild.
 
-This service is intentionally thin — it owns the state machine and
-delegates Throne resolution to :class:`~rob.services.throne_service.ThroneService`
-and persistence to :class:`~rob.database.repositories.dommes.DommesRepository`
-and :class:`~rob.database.repositories.domme_onboarding.DommeOnboardingRepository`.
-
-The Discord cog is responsible for sending/editing the actual DM messages
-and for invoking these methods at the right interaction.
+Owns the state machine only; the cog sends/edits the DMs, ThroneService
+resolves creators, and the repositories persist state.
 """
 
 from __future__ import annotations
@@ -120,9 +115,8 @@ class DMOnboardingService:
         guild_id: int,
         discord_user_id: int,
     ) -> str | None:
-        """Register the Dom/me and return their webhook URL (or None if
-        webhook base URL is not configured)."""
-
+        """Register the Dom/me and return their webhook URL, or None if no
+        webhook base URL is configured."""
         if not self.is_enabled_for(guild_id):
             raise OnboardingError("DM onboarding is only available in the test guild.")
         state = await self.onboarding.get(guild_id=guild_id, discord_user_id=discord_user_id)
@@ -142,12 +136,10 @@ class DMOnboardingService:
         return result.webhook_url
 
     async def reject_identity(self, *, guild_id: int, discord_user_id: int) -> None:
-        """User said 'Not quite!' — clear pending throne and go back to step 1."""
-
+        """Rewind to the Throne-input stage after the user rejects the match."""
         if not self.is_enabled_for(guild_id):
             raise OnboardingError("DM onboarding is only available in the test guild.")
-        # We intentionally don't have a clear-pending API; restart() will
-        # leave the row in place and we just rewind the stage.
+        # There is no clear-pending API; leave the row and just rewind the stage.
         await self.onboarding.set_stage(
             guild_id=guild_id,
             discord_user_id=discord_user_id,

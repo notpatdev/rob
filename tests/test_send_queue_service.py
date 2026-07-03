@@ -386,10 +386,9 @@ def test_send_queue_idle_tasks_skip_release_and_refresh_during_maintenance():
 
 
 def test_send_queue_idle_tasks_post_pending_without_maintenance_release(monkeypatch: pytest.MonkeyPatch):
-    # Regression (durability): pending sends must be swept on every idle tick,
-    # not only when release_queued_maintenance() returns > 0. Otherwise a send
-    # whose ops-notify was dropped (or that survived a restart) would sit in
-    # 'pending' forever.
+    # Regression: pending sends must be swept on every idle tick, not only when
+    # release_queued_maintenance() > 0, or a send whose ops-notify was dropped
+    # (or that survived a restart) sits in 'pending' forever.
     monkeypatch.setattr("rob.services.send_queue_service.discord.TextChannel", _FakeChannel)
     sends = _FakeSends()
     sends.released = 0  # nothing released from maintenance this tick
@@ -456,8 +455,7 @@ def test_send_queue_processes_notified_send_by_id(monkeypatch: pytest.MonkeyPatc
 
 
 def test_test_guild_send_posts_to_channel_like_main(monkeypatch: pytest.MonkeyPatch):
-    # The test guild uses the same public send-tracking channel as the main
-    # server; there is no DM-only routing.
+    # The test guild uses the same public send-tracking channel as main; no DM-only routing.
     monkeypatch.setattr("rob.services.send_queue_service.discord.TextChannel", _FakeChannel)
     sends = _FakeSends()
     sends.pending = [_send(guild_id=TEST_GUILD_ID)]

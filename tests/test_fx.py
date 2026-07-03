@@ -88,7 +88,6 @@ def test_refresh_failure_keeps_working_off_static(monkeypatch):
 
     monkeypatch.setattr(fx, "fetch_ecb_rates", boom)
     assert asyncio.run(refresh_rates()) is False
-    # Conversion still works using the bundled snapshot.
     assert convert_cents_to_usd(100, "USD") == 100
 
 

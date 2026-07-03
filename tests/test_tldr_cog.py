@@ -136,8 +136,7 @@ def test_cooldown_blocks_second_call():
 
     second = _interaction(channel=_channel())
     asyncio.run(TldrCog.tldr.callback(cog, second))
-    # On cooldown: short-circuits with an ephemeral response, never defers or
-    # reaches the summariser followup.
+    # On cooldown: ephemeral short-circuit, no defer, no summariser followup.
     assert not second.response.deferred
     assert second.response.messages
     assert second.response.messages[0]["ephemeral"] is True
@@ -181,7 +180,6 @@ def test_success_defaults_to_24h_and_sends_public_plain_message():
     assert "view" not in sent and "embeds" not in sent
     assert "a summary" in sent["content"]
     assert isinstance(sent["allowed_mentions"], discord.AllowedMentions)
-    # Default timeframe applied
     assert _bot.last_call["timeframe_label"] == "the last 24 hours"
 
 

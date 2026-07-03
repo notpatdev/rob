@@ -25,7 +25,6 @@ def test_guild_helpers_handle_none_and_other_ids():
 
 
 def test_new_system_guild_helper_covers_main_and_test():
-    # The new Dom/me system is live on both the main and test guilds.
     assert is_new_system_guild(MAIN_GUILD_ID) is True
     assert is_new_system_guild(TEST_GUILD_ID) is True
 

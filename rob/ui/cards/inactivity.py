@@ -12,7 +12,7 @@ def first_inactivity_warning_card(
     remove_at_unix: int,
     main_chat_channel: str,
 ) -> RenderedMessage:
-    """First notice — sent the moment a member is marked inactive."""
+    """First notice, sent when a member is marked inactive."""
 
     return render(
         make_card(
@@ -51,7 +51,7 @@ def final_inactivity_warning_card(
     remove_at_unix: int,
     main_chat_channel: str,
 ) -> RenderedMessage:
-    """Final notice — sent shortly before the scheduled removal."""
+    """Final notice, sent shortly before the scheduled removal."""
 
     return render(
         make_card(

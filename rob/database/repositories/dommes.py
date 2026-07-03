@@ -297,12 +297,9 @@ class DommesRepository:
         clear_defer: bool = False,
         confirm: bool = False,
     ) -> Domme | None:
-        """Update leaderboard + preference state for a Dom/me.
-
-        ``None`` for a value means "do not change". Use ``clear_defer`` to
-        explicitly set ``preferences_deferred_until`` to ``NULL``.
-        ``confirm=True`` sets ``preferences_confirmed_at`` to ``now()``.
-        """
+        """Update leaderboard/preference state. None means "do not change";
+        clear_defer nulls preferences_deferred_until, confirm=True stamps
+        preferences_confirmed_at."""
 
         async with self.database.acquire() as connection:
             row = await connection.fetchrow(

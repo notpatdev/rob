@@ -37,8 +37,8 @@ async def main_async() -> None:
         settings.throne_webhook_port,
     )
 
-    # Keep currency conversions current: fetch live ECB rates on startup and
-    # every 12h. Failures fall back to the bundled snapshot (see rob.utils.fx).
+    # Fetch live ECB rates on startup and every 12h; failures fall back to
+    # the bundled snapshot (see rob.utils.fx).
     fx_refresher = asyncio.create_task(run_rate_refresher(), name="rob-fx-refresher")
 
     try:

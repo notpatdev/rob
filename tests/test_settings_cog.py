@@ -1,8 +1,4 @@
-"""Focused tests for the ``/preferences`` settings cog.
-
-These prove the new Dom/me preferences command is now offered on the main
-guild (alongside the test guild) and still gated off for unrelated guilds.
-"""
+"""/preferences is offered on the main and test guilds and gated off elsewhere."""
 
 from __future__ import annotations
 
@@ -14,7 +10,6 @@ from rob.config.guilds import MAIN_GUILD_ID, TEST_GUILD_ID
 from rob.discord.cogs.settings import SettingsCog
 from rob.ui.cards.dm_onboarding import PreferencesView
 
-# A guild that is neither main nor test: /preferences must stay unavailable.
 OTHER_GUILD_ID = 424242424242424242
 
 
@@ -40,7 +35,7 @@ def _make_bot(*, access_role_id: int | None):
 
 
 def test_preferences_command_is_registered_for_main_and_test_guild():
-    # The command scope was widened from test-only to main + test.
+    # Guards the scope widening from test-only to main + test.
     guild_ids = getattr(SettingsCog.preferences_command, "_guild_ids", None)
     assert guild_ids is not None
     assert MAIN_GUILD_ID in guild_ids
@@ -56,7 +51,6 @@ def test_preferences_panel_offered_on_main_guild():
 
     interaction.response.send_message.assert_awaited_once()
     kwargs = interaction.response.send_message.await_args.kwargs
-    # The live preferences panel is sent (not the "not available here" card).
     assert isinstance(kwargs.get("view"), PreferencesView)
     assert kwargs.get("ephemeral") is True
 
@@ -70,7 +64,6 @@ def test_preferences_panel_unavailable_outside_new_system_guild():
 
     interaction.response.send_message.assert_awaited_once()
     kwargs = interaction.response.send_message.await_args.kwargs
-    # Falls through to the "not available" error card; no preferences view and
-    # settings are never consulted.
+    # Gating happens before the settings repo is consulted.
     assert not isinstance(kwargs.get("view"), PreferencesView)
     bot.guild_settings_repo.get.assert_not_awaited()

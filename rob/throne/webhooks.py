@@ -111,14 +111,10 @@ async def handle_throne_webhook(request: web.Request) -> web.Response:
     notify_state: dict[str, bool] = {"sent": False}
 
     async def _maybe_auto_advance(reason: str) -> None:
-        """Best-effort auto-advance of the DM onboarding flow.
+        """Notify the bot to advance DM onboarding, at most once per webhook.
 
-        Always safe to call multiple times: the bot-side cog gates on the
-        current onboarding stage and is a no-op for completed / unknown
-        users. Failures here must never break the webhook response.
-
-        We additionally guard against multiple notifications per webhook
-        delivery so the bot ops endpoint sees one POST per inbound event.
+        Safe to call repeatedly (the cog gates on onboarding stage); failures
+        must not break the webhook response.
         """
 
         if not in_new_system_guild:
@@ -194,15 +190,13 @@ async def handle_throne_webhook(request: web.Request) -> web.Response:
         )
         await dommes.mark_setup_verified(matched_creator.id)
         await _maybe_auto_advance("known_test_sender")
-        # Intentionally fall through: known_test_sender rows are still
-        # inserted via ``record_throne_send`` below so the public send
-        # tracker flow can render them (they're stored with
-        # ``is_test_send=true`` and filtered out of leaderboards).
+        # Fall through: these rows are still inserted via record_throne_send so
+        # the send tracker can render them (is_test_send=true keeps them off
+        # leaderboards).
     if known_test_sender and settings.throne_parse_test_sends_as_real_sends:
         log.warning("Known Throne test sender accepted as real send due to THRONE_PARSE_TEST_SENDS_AS_REAL_SENDS=true. creator_id=%s gifter_username=%s", creator_id, parsed.gifter_username)
-        # Still mark setup and auto-advance: this is the same Throne test
-        # webhook click, just stored as a real send for visual flow testing.
-        # Intentionally fall through to ``record_throne_send`` below.
+        # Same Throne test click, just stored as a real send; still mark setup
+        # and fall through to record_throne_send.
         await dommes.mark_setup_verified(matched_creator.id)
         await _maybe_auto_advance("known_test_sender_parsed_as_real")
 
@@ -231,8 +225,7 @@ async def handle_throne_webhook(request: web.Request) -> web.Response:
     await dommes.touch_successful_event(matched_creator.id)
 
     if send is None:
-        # Duplicate event — still attempt auto-advance because the user's
-        # onboarding may be waiting on this same successful webhook arrival.
+        # Onboarding may be waiting on this same webhook, duplicate or not.
         await _maybe_auto_advance("duplicate_send")
         return web.json_response({"ok": True, "duplicate": True})
 
@@ -243,9 +236,8 @@ async def handle_throne_webhook(request: web.Request) -> web.Response:
         guild_id=send.guild_id,
     )
 
-    # A successful send for a Dom/me who is still mid-onboarding is the
-    # same "Throne test webhook arrived" signal the user is waiting for.
-    # The bot-side cog is a safe no-op if onboarding is already complete.
+    # A real send is the same signal a mid-onboarding Dom/me is waiting for;
+    # the cog is a no-op once onboarding is complete.
     await _maybe_auto_advance("real_send_recorded")
 
     response: dict[str, Any] = {

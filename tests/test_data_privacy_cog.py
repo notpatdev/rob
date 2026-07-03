@@ -1,13 +1,5 @@
-"""Tests for the privacy / right-to-erasure cog.
-
-These use fakes (no Postgres, no Discord network). They cover:
-
-* ``on_member_remove`` triggers a full wipe ONLY for ``MAIN_GUILD_ID`` and not
-  for any other guild.
-* The ``/forgetme`` confirmation buttons call the correct repo method for the
-  chosen scope (single-guild confirm, "just this server", "everywhere").
-* The summary surfaces the row counts the repo reports.
-"""
+"""Privacy / right-to-erasure cog tests, using fakes (no Postgres, no
+Discord network)."""
 
 from __future__ import annotations
 
@@ -17,11 +9,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 from rob.config.guilds import MAIN_GUILD_ID, TEST_GUILD_ID
 from rob.discord.cogs.data_privacy import DataPrivacyCog, _ForgetMeView, _summarize
-
-
-# ---------------------------------------------------------------------------
-# Fakes
-# ---------------------------------------------------------------------------
 
 
 def _fake_repo(*, guilds=None, deleted=None):
@@ -55,11 +42,6 @@ def _fake_member(*, user_id=7, guild_id=MAIN_GUILD_ID):
     return SimpleNamespace(id=user_id, guild=SimpleNamespace(id=guild_id))
 
 
-# ---------------------------------------------------------------------------
-# on_member_remove gating
-# ---------------------------------------------------------------------------
-
-
 def test_member_remove_from_main_guild_wipes_everywhere():
     repo = _fake_repo()
     cog = DataPrivacyCog(_fake_bot(repo))
@@ -86,13 +68,8 @@ def test_member_remove_swallows_repo_errors():
     repo.delete_user_everywhere = AsyncMock(side_effect=RuntimeError("db down"))
     cog = DataPrivacyCog(_fake_bot(repo))
 
-    # Must not raise — a failed auto-wipe should be logged, not crash the gateway.
+    # Must not raise: a failed auto-wipe is logged, not crashing the gateway.
     asyncio.run(cog.on_member_remove(_fake_member(guild_id=MAIN_GUILD_ID)))
-
-
-# ---------------------------------------------------------------------------
-# /forgetme — building the confirmation card
-# ---------------------------------------------------------------------------
 
 
 def test_forgetme_single_guild_shows_simple_confirm():
@@ -126,11 +103,6 @@ def test_forgetme_multi_guild_offers_scope_choice():
     assert "Cancel" in labels
 
 
-# ---------------------------------------------------------------------------
-# /forgetme — confirm callbacks route to the right repo method
-# ---------------------------------------------------------------------------
-
-
 def _button_labels(view) -> list[str]:
     labels: list[str] = []
     for child in view.walk_children():
@@ -149,8 +121,7 @@ def _button_by_label(view, label: str):
 
 def test_single_guild_confirm_wipes_everywhere():
     # A single-guild requester has data in at most one place, so the confirm
-    # wipes everywhere — correct even if invoked from another server, and it
-    # clears their guild-less terms record too.
+    # wipes everywhere; this also clears their guild-less terms record.
     repo = _fake_repo(guilds=[111], deleted={"subs": 1, "dommes": 1})
     cog = DataPrivacyCog(_fake_bot(repo))
     view = _ForgetMeView(cog=cog, user_id=7, guild_id=111, multi_guild=False)
@@ -226,11 +197,6 @@ def test_confirmation_card_is_locked_to_requester():
     allowed = asyncio.run(view.interaction_check(other))
     assert allowed is False
     other.response.send_message.assert_awaited_once()
-
-
-# ---------------------------------------------------------------------------
-# summary helper
-# ---------------------------------------------------------------------------
 
 
 def test_summary_reports_total_and_breakdown():

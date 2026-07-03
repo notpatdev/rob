@@ -53,7 +53,6 @@ class SendQueueService:
         self._startup_leaderboard_refresh_done = False
         self._send_notifications: asyncio.Queue[int] | None = None
 
-
     async def _maintenance_bool(self, method_name: str, guild_id: int | None = None) -> bool:
         method = getattr(self.maintenance, method_name, None)
         if method is None:
@@ -99,8 +98,7 @@ class SendQueueService:
         await self.bot.wait_until_ready()
         await self._refresh_leaderboards_on_startup()
         try:
-            # Drain any sends left in 'pending' by a crash/restart or a missed
-            # ops notify before entering the notify-driven loop.
+            # Drain sends stranded in 'pending' by a crash or missed notify.
             await self.process_cycle()
         except Exception:
             log.exception("Startup pending-send drain failed.")
@@ -176,12 +174,8 @@ class SendQueueService:
                 await self.leaderboard_service.refresh_all_guilds()
 
     async def process_idle_tasks(self) -> None:
-        """Sweep pending sends and run periodic maintenance each idle tick.
-
-        Delivery is normally driven by the ops notify queue; this idle sweep is
-        the durable backstop so a dropped notify or a restart can never strand a
-        ``pending`` send — it stays in the DB queue until it posts.
-        """
+        """Delivery is notify-driven; this idle sweep is the backstop that
+        keeps a dropped notify or a restart from stranding a pending send."""
         await self.process_cycle()
 
     async def notify_send(self, send_id: int) -> None:

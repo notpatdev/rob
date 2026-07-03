@@ -225,7 +225,6 @@ def test_multi_chunk_window_is_map_reduced_and_covers_all_messages():
     chunk_count = len(svc._chunk_transcripts(msgs))
     # One call per chunk plus the final combine call.
     assert len(session.calls) == chunk_count + 1
-    # The combine call merges the partial summaries.
     assert "Partial summaries:" in session.calls[-1][1]["prompt"]
 
 
@@ -250,7 +249,6 @@ def test_max_chunks_caps_latency_and_keeps_most_recent():
     )
     assert len(session.calls) == 3  # 2 chunks + combine
     assert result.ai_message_count < 30  # honesty: only the most recent chunks
-    # The most recent messages are what survived the cap.
     assert "message number 29" in session.calls[1][1]["prompt"]
 
 
@@ -299,16 +297,15 @@ def test_transcript_char_budget_limits_prompt_and_keeps_recent_messages():
     prompt, included = svc._build_prompt(
         msgs, topic=None, timeframe_label="today", channel_name="general"
     )
-    # The transcript keeps the most recent messages within the budget, and
-    # reports how many actually fit so the card footer can be honest.
+    # The budget keeps the most recent messages; included reports how many fit.
     assert "message number 49" in prompt
     assert "message number 0" not in prompt
     assert 0 < included < 50
 
 
 def test_ollama_timeout_falls_back_and_trips_breaker():
-    # A bare TimeoutError (aiohttp total-timeout) must be handled like any other
-    # "server slow/unreachable" case: digest fallback + breaker tripped.
+    # A bare TimeoutError (aiohttp total-timeout) must fall back to the digest
+    # and trip the breaker like any other connection failure.
     session = _FakeSession(error=TimeoutError())
     svc = TldrService(
         enabled=True,
@@ -334,7 +331,7 @@ def test_ollama_timeout_logs_exception_type(caplog):
     with caplog.at_level(logging.INFO, logger="rob.services.tldr_service"):
         _run(svc.summarize(SAMPLE, topic=None, timeframe_label="today", channel_name="general"))
     # The log must name the exception type (never an empty "()") and show the
-    # configured timeout so "I raised the timeout" is verifiable from the log.
+    # configured timeout.
     messages = [record.getMessage() for record in caplog.records]
     assert any("TimeoutError" in message for message in messages)
     assert any("timeout=" in message for message in messages)
@@ -380,8 +377,8 @@ def test_summarize_serves_digest_while_warm_up_in_flight():
         ollama_url="http://127.0.0.1:11434",
         session_factory=lambda: session,
     )
-    # Simulate an in-flight warm-up: /tldr must not queue behind the model load
-    # (that would time out AND trip the breaker), it should serve the digest.
+    # /tldr must not queue behind an in-flight model load (that would time out
+    # and trip the breaker); it should serve the digest.
     svc._warmup_task = SimpleNamespace(done=lambda: False)
     result = _run(
         svc.summarize(SAMPLE, topic=None, timeframe_label="today", channel_name="general")
@@ -392,8 +389,8 @@ def test_summarize_serves_digest_while_warm_up_in_flight():
 
 
 def test_warm_up_success_clears_tripped_breaker():
-    # A user call racing the cold load may have tripped the breaker; once the
-    # model is confirmed loaded the breaker must be cleared.
+    # A user call racing the cold load may have tripped the breaker; a warm-up
+    # success must clear it.
     session = _FakeSession(response=_FakeOllamaResponse(200, {"done": True}))
     svc = TldrService(
         enabled=True,
@@ -407,8 +404,8 @@ def test_warm_up_success_clears_tripped_breaker():
 
 
 def test_warm_up_loop_retries_until_success():
-    # Ollama may start after the bot on a reboot: the loop must retry failures
-    # (with backoff) and stop once the model loads.
+    # Ollama may start after the bot on a reboot: retry with backoff until the
+    # model loads.
     attempts = []
 
     class _FlakySession:
@@ -496,7 +493,7 @@ def test_ollama_non_200_falls_back():
 
 
 def test_ollama_null_response_falls_back_to_digest():
-    # A 200 with {"response": null} must not surface the literal "None" — it
+    # A 200 with {"response": null} must not surface a literal "None"; it
     # should fall back to the digest.
     session = _FakeSession(response=_FakeOllamaResponse(200, {"response": None}))
     svc = TldrService(

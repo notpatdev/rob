@@ -55,9 +55,8 @@ def test_empty_segments_yield_empty_text():
 
 
 def test_missing_faster_whisper_marks_unavailable():
-    # faster-whisper is an optional dep and is not installed in the test env, so
-    # loading the model fails (ImportError) and the service disables itself
-    # permanently (never worth retrying a missing dependency).
+    # faster-whisper isn't installed in the test env, so the model load fails
+    # with ImportError and the service disables itself permanently.
     svc = TranscriptionService(enabled=True)
     assert svc.available is True  # before first use
     result = asyncio.run(svc.transcribe(b"audio-bytes"))
@@ -106,8 +105,8 @@ def test_permission_error_load_failure_logs_actionable_hint(caplog):
 
 
 def test_transient_load_failure_backs_off_and_retries():
-    # A non-ImportError load failure (e.g. a download blip) must NOT permanently
-    # disable the feature — it backs off and becomes available again later.
+    # A non-ImportError load failure (e.g. a download blip) must back off and
+    # retry, not permanently disable the feature.
     svc = TranscriptionService(enabled=True)
 
     def _boom():

@@ -20,14 +20,11 @@ _UNMATCHABLE_SUB_NAMES = {"anonymous", "anon", "private", "hidden"}
 
 
 def _safe_convert_cents_to_usd(amount_cents: int, currency: str | None) -> int | None:
-    """Convert to USD cents, or ``None`` if the currency is unknown/invalid.
+    """Convert to USD cents, or None for an unknown/invalid currency.
 
-    Throne can send any currency string and, on refunds, negative amounts.
-    Returning ``None`` instead of raising lets the webhook handler record the
-    event (so Throne stops retrying) without crashing or crediting a wrong
-    amount.
+    Throne can send arbitrary currency strings; returning None instead of
+    raising lets the webhook handler record the event so Throne stops retrying.
     """
-
     try:
         return convert_cents_to_usd(amount_cents, currency)
     except (UnsupportedCurrencyError, ValueError):
@@ -131,8 +128,8 @@ class SendService:
                     is_private = False
 
         if conversion_failed:
-            # Stored truthfully (original_amount/currency preserved) but never
-            # posted or counted, so an unknown currency can't corrupt USD totals.
+            # Stored with original amount/currency but never posted or counted,
+            # so an unknown currency can't corrupt USD totals.
             status = "ignored"
         elif await self._send_tracking_disabled_for_guild(creator.guild_id):
             status = "posted"
@@ -197,10 +194,8 @@ class SendService:
         resolved_sub_user_id = sub_user_id
         resolved_sub_name = sub_name
 
-        # A free-text sub that is actually a Discord mention ("<@123>", e.g.
-        # typed via the @-autocomplete) is a link to that user, not a claimable
-        # nickname. Pull the id out so the send is attributed to them instead of
-        # being stored verbatim and rendered as "@User with no nickname claimed".
+        # A sub name that is really a Discord mention ("<@123>") identifies a
+        # user, not a nickname; attribute the send to that user.
         if resolved_sub_user_id is None:
             mentioned_user_id = parse_user_mention(resolved_sub_name)
             if mentioned_user_id is not None:

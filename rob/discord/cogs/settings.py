@@ -1,9 +1,4 @@
-"""``/preferences`` slash command for the test guild only.
-
-Lets a member toggle their leaderboard access (the role that opens the
-#leaderboard channel and the ``/leaderboard`` command). The command is only
-registered to the test guild; the guild check here is a defensive fallback.
-"""
+"""/preferences: lets a member toggle their leaderboard access role."""
 
 from __future__ import annotations
 
@@ -40,12 +35,7 @@ class SettingsCog(commands.Cog):
         self.bot = bot
 
     async def _send_preferences_panel(self, interaction: discord.Interaction) -> None:
-        """Build and send the leaderboard-access panel.
-
-        When an access role is configured for the guild, the caller can grant or
-        remove it for themselves; on save Rob assigns/removes the role to match.
-        """
-
+        """Send the leaderboard-access panel; on save Rob syncs the role."""
         if not is_new_system_guild(interaction.guild_id):
             await interaction.response.send_message(**_not_available_response(), ephemeral=True)
             return

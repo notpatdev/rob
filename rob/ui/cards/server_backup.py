@@ -10,7 +10,7 @@ from rob.ui.render import (
 from rob.ui.components import make_card
 from rob.ui.theme import COLOR_DANGER, COLOR_NEUTRAL, COLOR_SUCCESS
 
-# Faithful to the requested copy (with the obvious "IS"->"IF" typo corrected).
+# Exact requested copy, with the "IS"->"IF" typo fixed.
 REVAMP_WARNING = (
     "DO NOT ACCEPT THIS IF YOU ARE DOING A REVAMP UNLESS YOU ARE SURE "
     "EVERYTHING CURRENTLY WORKS"
@@ -33,13 +33,9 @@ def major_change_approval_card(
     required_approvals: int,
     view: discord.ui.LayoutView | None = None,
 ) -> RenderedMessage:
-    """The "Major Server Change Detected!" approval prompt.
-
-    Components V2 messages cannot carry plain ``content``, so the moderator role
-    mentions live inside the card body; pass a per-message ``allowed_mentions``
-    when sending so they actually ping.
-    """
-
+    """Components V2 messages cannot carry plain content, so the moderator
+    mentions live in the card body; pass allowed_mentions when sending or
+    they won't ping."""
     changes_block = "\n".join(f"* {line}" for line in change_lines) or "* (no details available)"
     body = (
         "### Major Server Change Detected!\n\n"

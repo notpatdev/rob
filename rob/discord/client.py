@@ -252,8 +252,7 @@ class RobBot(commands.Bot):
         await self.counting_service.start()
         await self.send_queue_service.start()
         await self.bot_ops_server.start()
-        # Pre-load the local TL;DR model in the background so the first /tldr
-        # doesn't pay the cold-start cost (no-op when Ollama isn't configured).
+        # Warm the TL;DR model so the first /tldr skips the cold start; no-op without Ollama.
         self.tldr_service.begin_warm_up()
 
     async def _global_interaction_check(
@@ -289,9 +288,7 @@ class RobBot(commands.Bot):
         return await self._global_interaction_check(interaction)
 
     async def _sync_application_commands(self) -> None:
-        """Push guild-scoped commands to the main + test guilds and the
-        remaining (DM-capable) commands globally."""
-
+        """Sync commands to the main and test guilds, then DM-capable commands globally."""
         for guild_id in (MAIN_GUILD_ID, TEST_GUILD_ID):
             guild = discord.Object(id=guild_id)
             synced_guild = await self.tree.sync(guild=guild)

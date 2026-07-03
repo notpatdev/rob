@@ -1,33 +1,7 @@
-"""Runtime interactions for the DM-based Dom/me onboarding flow.
+"""DM-based Dom/me onboarding flow: buttons, modals, and staged DM edits.
 
-This cog is responsible for:
-
-- handling all onboarding button + modal interactions
-- opening / submitting the Throne input modal
-- calling :class:`~rob.services.dm_onboarding_service.DMOnboardingService`
-- editing the same DM message through each stage of the flow
-- rotating the webhook URL when the user clicks "Doesn’t look to have worked!"
-- handling the migration prompt (Save preferences / Defer for 7 days)
-- being notified from the webhook handler when a Throne test webhook is
-  received, and auto-advancing the DM to the preferences card
-
-Interaction model
------------------
-
-Every interactive button used in the onboarding flow is a small bound
-``discord.ui.Button`` subclass defined in :mod:`rob.ui.cards.dm_onboarding`
-whose ``callback`` calls back into this cog by name. Cards are built with
-``cog=self`` so the LIVE :class:`discord.ui.LayoutView` attached to the
-DM message has buttons whose callbacks dispatch correctly — that's what
-fixes the previous "This interaction failed" behaviour, which was caused
-by sending plain custom-id-only buttons (whose default callback is a
-no-op) inside the live LayoutView while a separate persistent ``View``
-held the real callbacks. After a restart, the persistent view registered
-in :meth:`DMOnboardingCog.register_persistent_views` acts as the
-fallback route for the same custom IDs.
-
-All onboarding behavior is gated to the new-system guilds (main + test;
-see :func:`rob.config.guilds.is_new_system_guild`).
+Buttons are built with cog=self so the live LayoutView dispatches real
+callbacks; custom-id-only buttons inside a LayoutView are silent no-ops.
 """
 
 from __future__ import annotations
@@ -76,11 +50,9 @@ log = logging.getLogger(__name__)
 
 
 class _PersistentInteractionsView(discord.ui.View):
-    """Plain :class:`discord.ui.View` registered at startup that owns every
-    onboarding button custom_id. discord.py's ``ViewStore`` falls back to
-    this view (keyed on ``custom_id`` only, no ``message_id``) when an
-    interaction comes in for a DM whose live LayoutView is no longer in
-    memory (typical after a bot restart).
+    """Fallback view registered at startup. discord.py's ViewStore routes
+    interactions here (matched on custom_id alone) when the live LayoutView
+    is no longer in memory, typically after a bot restart.
     """
 
     def __init__(self, cog: "DMOnboardingCog") -> None:
@@ -95,28 +67,18 @@ class _PersistentInteractionsView(discord.ui.View):
         self.add_item(MigrationOpenPrefsButton(cog))
 
 
-# ---------------------------------------------------------------------------
-# Cog
-# ---------------------------------------------------------------------------
-
-
 class DMOnboardingCog(commands.Cog):
     """Runtime cog for the DM-based onboarding flow (test guild only)."""
 
     def __init__(self, bot: "RobBot") -> None:
         self.bot = bot
 
-    # -- service helper ----------------------------------------------------
-
     @property
     def service(self) -> DMOnboardingService | None:
         return getattr(self.bot, "dm_onboarding_service", None)
 
-    # -- view registration -------------------------------------------------
-
     def register_persistent_views(self) -> None:
-        """Register the fallback persistent view so onboarding button custom
-        IDs route to live callbacks across bot restarts."""
+        """Register the fallback view so button custom IDs survive restarts."""
 
         try:
             self.bot.add_view(_PersistentInteractionsView(self))
@@ -129,19 +91,14 @@ class DMOnboardingCog(commands.Cog):
             return
         log.info("Registered persistent DM onboarding view")
 
-    # -- onboarding entry points ------------------------------------------
-
     async def start_onboarding_dm(
         self,
         *,
         user: discord.abc.User,
         guild_id: int,
     ) -> tuple[bool, discord.Message | None, str | None]:
-        """Start the DM-based onboarding flow for ``user``.
-
-        Returns ``(ok, message, error_text)``. The caller is responsible for
-        the ephemeral slash response.
-        """
+        """Start onboarding for user. Returns (ok, message, error_text);
+        the caller handles the ephemeral slash response."""
 
         service = self.service
         if service is None or not is_new_system_guild(guild_id):
@@ -196,8 +153,8 @@ class DMOnboardingCog(commands.Cog):
         user: discord.abc.User,
         guild_id: int,
     ) -> discord.Message | None:
-        """Send the migration prompt DM to an already-registered Dom/me in
-        the test guild. Returns the message (or ``None`` on failure)."""
+        """DM the migration prompt to an already-registered Dom/me. Returns
+        the message, or None on failure."""
 
         if not is_new_system_guild(guild_id):
             return None
@@ -215,8 +172,6 @@ class DMOnboardingCog(commands.Cog):
                 exc,
             )
             return None
-
-    # -- internal: persist + fetch the in-progress DM message --------------
 
     async def _persist_dm_message(
         self,
@@ -243,12 +198,8 @@ class DMOnboardingCog(commands.Cog):
             )
 
     async def _resolve_guild_id_for_user(self, user_id: int) -> int | None:
-        """Look up the guild an in-progress onboarding belongs to.
-
-        DM interactions have no ``interaction.guild`` set, so the cog can't
-        otherwise tell which guild the flow was started from. The flow is
-        test-guild only, so we look up the row by ``TEST_GUILD_ID``.
-        """
+        """DM interactions carry no interaction.guild, so look up the
+        in-progress row by TEST_GUILD_ID (the flow is test-guild only)."""
 
         repo = getattr(self.bot, "domme_onboarding_repo", None)
         if repo is None:
@@ -274,8 +225,6 @@ class DMOnboardingCog(commands.Cog):
         discord_user_id: int,
         rendered: Any,
     ) -> bool:
-        """Edit the stored DM message in place; returns ``True`` on success."""
-
         repo = getattr(self.bot, "domme_onboarding_repo", None)
         if repo is None:
             return False
@@ -323,8 +272,6 @@ class DMOnboardingCog(commands.Cog):
                 exc,
             )
             return False
-
-    # -- button handlers --------------------------------------------------
 
     async def handle_open_modal(self, interaction: discord.Interaction) -> None:
         log.info(
@@ -532,11 +479,8 @@ class DMOnboardingCog(commands.Cog):
         )
 
     async def handle_webhook_retry(self, interaction: discord.Interaction) -> None:
-        """User clicked "Doesn’t look to have worked!".
-
-        We rotate the webhook URL (so any leaked/stale URL is invalidated)
-        and re-render the same waiting card with the new URL.
-        """
+        """Rotate the webhook URL so a leaked or stale one is invalidated,
+        then re-render the waiting card with the new URL."""
 
         log.info("handle_webhook_retry user_id=%s", interaction.user.id)
         guild_id = await self._resolve_guild_id_for_user(interaction.user.id)
@@ -644,8 +588,6 @@ class DMOnboardingCog(commands.Cog):
             guild_id=guild_id,
             rendered=rendered,
         )
-
-    # -- migration handlers ------------------------------------------------
 
     async def handle_migration_save(
         self, interaction: discord.Interaction, view: Any = None
@@ -760,9 +702,8 @@ class DMOnboardingCog(commands.Cog):
     async def handle_migration_open_prefs(
         self, interaction: discord.Interaction
     ) -> None:
-        """Legacy path for the deprecated Open Preferences button on stale
-        migration DMs. Just re-renders the migration card so the user can
-        proceed."""
+        """Deprecated Open Preferences button on stale migration DMs:
+        re-render the migration card so the user can proceed."""
 
         log.info(
             "handle_migration_open_prefs (legacy) user_id=%s", interaction.user.id
@@ -779,17 +720,15 @@ class DMOnboardingCog(commands.Cog):
             except discord.HTTPException:
                 log.exception("Could not re-send migration prompt.")
 
-    # -- webhook auto-advance hook (called from bot ops endpoint) ----------
-
     async def on_throne_test_webhook_received(
         self,
         *,
         guild_id: int,
         discord_user_id: int,
     ) -> bool:
-        """Auto-advance the onboarding DM to the preferences card when a
-        Throne test webhook arrives. Returns ``True`` if the DM was edited.
-        """
+        """Called from the bot ops endpoint when a Throne test webhook
+        arrives; advances the DM to the preferences card. Returns True if
+        the DM was edited."""
 
         log.info(
             "on_throne_test_webhook_received user_id=%s guild_id=%s",
@@ -864,8 +803,6 @@ class DMOnboardingCog(commands.Cog):
             )
         return edited
 
-    # -- internal: edit or resend the DM ----------------------------------
-
     async def _edit_or_resend(
         self,
         *,
@@ -917,23 +854,16 @@ class DMOnboardingCog(commands.Cog):
             )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _read_prefs_from_interaction(
     interaction: discord.Interaction,
     view: Any = None,
 ) -> bool:
-    """Pull the current leaderboard-access selection off the interaction.
+    """Read the leaderboard-access selection off the interaction.
 
-    Prefers the live :class:`PreferencesView` / :class:`MigrationPromptView`
-    handed over by the Save button — the message components only ever carry the
-    original ``default`` flags, never the user's live selection, so reading them
-    would always report the default ("access off"). Falls back to the
-    interaction's own view and finally to scanning the message components.
-    Returns ``leaderboard_access``, defaulting to ``False``.
+    Prefers the live view handed over by the Save button: message components
+    only ever carry the original default flags, never the user's live
+    selection. Falls back to the interaction's own view, then to scanning
+    the message components. Defaults to False.
     """
 
     leaderboard_access = False
@@ -960,9 +890,9 @@ def _read_prefs_from_interaction(
 
     for row in getattr(message, "components", []) or []:
         for child in getattr(row, "children", []) or []:
-            # Check this child directly (legacy: select as direct container child).
+            # Legacy layout: select as a direct container child.
             _match_select(child)
-            # Check one level deeper (current: select inside ActionRow inside container).
+            # Current layout: select inside an ActionRow inside the container.
             for grandchild in getattr(child, "children", []) or []:
                 _match_select(grandchild)
     return leaderboard_access

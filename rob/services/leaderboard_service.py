@@ -69,7 +69,6 @@ class LeaderboardService:
         self._refresh_locks: dict[int, asyncio.Lock] = {}
         self._content_hashes: dict[int, str] = {}
 
-
     async def _rob_offline_for_guild(self, guild_id: int | None) -> bool:
         checker = getattr(self.maintenance, "is_rob_offline_for_guild", None)
         if checker is None:
@@ -98,10 +97,8 @@ class LeaderboardService:
         guild_id: int,
         entries: list[LeaderboardEntry],
     ) -> list[LeaderboardEntry]:
-        """Pass-through. The leaderboard-visibility opt-out was removed, so every
-        Dom/me with sends now appears. Kept as a thin hook so callers and any
-        future per-guild filtering stay in one place."""
-
+        """Pass-through: the leaderboard-visibility opt-out was removed. Kept
+        as a hook for future per-guild filtering."""
         del guild_id
         return entries
 

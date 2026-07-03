@@ -1,15 +1,6 @@
-"""Chat TL;DR summariser.
-
-Two summarisation paths, both fully in-house (no chat data ever leaves the
-host):
-
-* an **extractive digest** built with plain Python (participants, links,
-  highlights, topic matches) that always works, and
-* an optional **natural-language summary** produced by a small local model
-  served by `Ollama <https://ollama.com>`_ over loopback. When Ollama is not
-  reachable Rob silently falls back to the digest, so the feature degrades
-  gracefully instead of failing.
-"""
+"""Chat TL;DR summariser: an extractive digest that always works, plus an
+optional summary from a local model served by Ollama. No chat data leaves the
+host; when Ollama is unreachable we fall back to the digest."""
 
 from __future__ import annotations
 
@@ -26,14 +17,13 @@ import aiohttp
 log = logging.getLogger(__name__)
 
 _URL_RE = re.compile(r"https?://[^\s<>|]+", re.IGNORECASE)
-# How long to stop trying Ollama after a connection failure, so a down server
+# Skip Ollama for this long after a connection failure, so a down server
 # doesn't add its connect timeout to every /tldr call.
 _OLLAMA_BACKOFF_SECONDS = 120
-# The startup warm-up may sit through a slow cold model load (disk + RAM alloc
-# on a small host), so it gets a much more generous window than user calls.
+# The startup warm-up may sit through a slow cold model load, so it gets a
+# much larger window than user calls.
 _WARMUP_TIMEOUT_SECONDS = 600
-# Upper bound on the transcript handed to the local model; small models have
-# small context windows, so keep the most recent messages within this budget.
+# Transcript budget for the local model's small context window.
 _AI_TRANSCRIPT_CHAR_BUDGET = 8000
 
 

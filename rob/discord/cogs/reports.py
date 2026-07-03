@@ -74,9 +74,8 @@ class ReportsCog(commands.Cog):
         self,
         interaction: discord.Interaction,
     ) -> discord.abc.Messageable | None:
-        # Reports are DM'd to the bot operator (OWNER_USER_ID) — never to a
-        # server channel, and never to the Discord application owner (which can
-        # be a team account or one with DMs closed, causing a 403).
+        # DM the bot operator, not the Discord application owner: that can be
+        # a team account or have DMs closed (403).
         user = self.bot.get_user(OWNER_USER_ID)
         if user is not None:
             return user
@@ -95,8 +94,7 @@ class ReportsCog(commands.Cog):
         try:
             return await attachment.to_file(use_cached=True)
         except TypeError:
-            # Some test doubles or alternate attachment implementations may not
-            # accept the newer keyword-only signature.
+            # Test doubles may not accept the keyword-only signature.
             try:
                 return await attachment.to_file()
             except (AttributeError, TypeError):
@@ -172,9 +170,8 @@ class ReportsCog(commands.Cog):
 
         try:
             await destination.send(**report_card.send_kwargs())
-            # The report card is a Components V2 view, which suppresses the
-            # default attachment preview — so any uploaded file is delivered as
-            # its own follow-up message, where it renders normally.
+            # Components V2 views suppress attachment previews, so the file is
+            # sent as its own follow-up message.
             if file_obj is not None:
                 await destination.send(file=file_obj)
             elif attachment is not None:

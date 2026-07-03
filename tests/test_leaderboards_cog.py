@@ -8,7 +8,7 @@ from rob.config.guilds import MAIN_GUILD_ID, TEST_GUILD_ID
 from rob.database.repositories.models import LatestTrackedSend, LeaderboardEntry, PersonalStatsSummary
 from rob.discord.cogs.leaderboards import LeaderboardsCog
 
-# A guild that is neither main nor test: leaderboard view gating must not apply.
+# Neither main nor test: leaderboard view gating must not apply here.
 OTHER_GUILD_ID = 424242424242424242
 
 
@@ -178,11 +178,6 @@ def test_leaderboard_member_without_roles_gets_role_guidance():
     assert "could not find Dom/me or Sub roles" in text
 
 
-# ---------------------------------------------------------------------------
-# Test-guild leaderboard access-role gating
-# ---------------------------------------------------------------------------
-
-
 def _deep_text(payload: dict) -> str:
     view = payload["view"]
     parts: list[str] = []
@@ -209,7 +204,6 @@ def test_leaderboard_blocked_in_test_guild_without_access_role():
 
 
 def test_leaderboard_allowed_in_test_guild_with_access_role():
-    # Viewer holds the access role (500) and the Dom/me role (11).
     viewer = _FakeMember(user_id=10, display_name="Pat", role_ids=[500, 11])
     guild = _FakeGuild({10: viewer}, guild_id=TEST_GUILD_ID)
     interaction = _FakeInteraction(user=viewer, guild=guild)
@@ -225,7 +219,6 @@ def test_leaderboard_allowed_in_test_guild_with_access_role():
 
 
 def test_leaderboard_open_in_test_guild_when_no_access_role_configured():
-    # No access role configured -> viewing stays open even in the test guild.
     viewer = _FakeMember(user_id=10, display_name="Pat", role_ids=[11])
     guild = _FakeGuild({10: viewer}, guild_id=TEST_GUILD_ID)
     interaction = _FakeInteraction(user=viewer, guild=guild)
@@ -238,11 +231,6 @@ def test_leaderboard_open_in_test_guild_when_no_access_role_configured():
     payload = interaction.response.messages[0]
     assert payload["ephemeral"] is False
     assert "Send Stats | Dom/me" in _message_text(payload)
-
-
-# ---------------------------------------------------------------------------
-# Main-guild leaderboard access-role gating (new system is live on main now)
-# ---------------------------------------------------------------------------
 
 
 def test_leaderboard_blocked_in_main_guild_without_access_role():
@@ -276,8 +264,6 @@ def test_leaderboard_allowed_in_main_guild_with_access_role():
 
 
 def test_leaderboard_open_in_non_system_guild_even_with_access_role():
-    # The access-role gate is still meaningful: outside main/test it never
-    # applies, so viewing stays open even when an access role is configured.
     viewer = _FakeMember(user_id=10, display_name="Pat", role_ids=[11])
     guild = _FakeGuild({10: viewer}, guild_id=OTHER_GUILD_ID)
     interaction = _FakeInteraction(user=viewer, guild=guild)

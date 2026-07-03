@@ -152,8 +152,8 @@ def test_report_modal_upload_is_forwarded_when_present():
         )
     )
 
-    # Components V2 cards suppress attachment previews, so the file is delivered
-    # as its own follow-up message rather than attached to the card.
+    # Components V2 cards suppress attachment previews, so the file goes out as
+    # a separate follow-up message.
     assert any("file" in message for message in bot.destination.messages)
 
 

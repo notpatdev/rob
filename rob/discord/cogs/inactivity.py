@@ -23,13 +23,13 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Components V2 text blocks are capped at 4000 chars; budget below that with
-# headroom for the card header and the truncation note.
+# Components V2 text blocks cap at 4000 chars; leave headroom for the card
+# header and the truncation note.
 _LIST_LINE_BUDGET = 3500
 
 
 def fit_list_lines(lines: list[str], total: int, *, budget: int = _LIST_LINE_BUDGET) -> list[str]:
-    """Trim ``lines`` so the rendered list stays under Discord's text limit,
+    """Trim lines so the rendered list stays under Discord's text limit,
     appending a "…and N more" note when entries are omitted."""
 
     fitted: list[str] = []
@@ -190,7 +190,7 @@ class InactivityCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        # Only ever exempts the caller — no target argument by design.
+        # Exempts only the caller; no target argument by design.
         until = await self.bot.inactivity_service.set_member_afk(
             interaction.guild.id, interaction.user.id
         )
@@ -203,8 +203,8 @@ class InactivityCog(commands.Cog):
     async def on_member_join(self, member: discord.Member) -> None:
         if not is_new_system_guild(member.guild.id):
             return
-        # New member: set their role state immediately (unverified -> parked,
-        # otherwise -> Active) rather than waiting for the next sweep.
+        # Sync immediately (unverified -> parked, else Active) instead of
+        # waiting for the next sweep.
         await self.bot.inactivity_service.sync_member_now(member.guild, member)
 
     @commands.Cog.listener()
@@ -221,8 +221,8 @@ class InactivityCog(commands.Cog):
         def _had(role_id: int | None, member: discord.Member) -> bool:
             return role_id is not None and any(role.id == role_id for role in member.roles)
 
-        # Gaining or losing the Unverified role flips their state instantly:
-        # gained -> parked inactive, lost (verified) -> Active right away.
+        # Unverified role change flips state instantly: gained -> parked
+        # inactive, lost -> Active.
         if unverified_role_id is not None and _had(unverified_role_id, before) != _had(unverified_role_id, after):
             await self.bot.inactivity_service.sync_member_now(after.guild, after)
             return

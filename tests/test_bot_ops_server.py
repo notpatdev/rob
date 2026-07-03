@@ -320,8 +320,7 @@ def test_bot_ops_without_secret_allows_loopback():
 
 
 def test_bot_ops_without_secret_denies_non_loopback_bind():
-    # Fail closed: with no secret AND a non-loopback bind, the ops API must be
-    # rejected rather than served unauthenticated.
+    # Fail closed: no secret + non-loopback bind must not serve unauthenticated.
     send_queue = _FakeSendQueue()
     bot = SimpleNamespace(send_queue_service=send_queue, user=SimpleNamespace(id=123))
     server = BotOpsServer(bot=bot, host="0.0.0.0", port=8811, secret=None)

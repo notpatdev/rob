@@ -391,7 +391,6 @@ def test_register_member_activity_records_but_does_not_touch_active_member():
 
     _run(service.register_member_activity(guild, member))
 
-    # Activity recorded, but no role churn for an already-active member.
     assert bot_state.values.get("activity:1:user:10:last_active") is not None
     assert member.has(ACTIVE_ROLE_ID)
     assert not member.has(INACTIVE_ROLE_ID)
@@ -407,7 +406,6 @@ def test_register_member_activity_does_not_reactivate_unverified():
 
     _run(service.register_member_activity(guild, member))
 
-    # Unverified members stay parked as inactive even when they interact.
     assert member.has(INACTIVE_ROLE_ID)
     assert not member.has(ACTIVE_ROLE_ID)
 
@@ -427,8 +425,7 @@ def test_inactive_member_cannot_reclaim_active_outside_main_channel():
 
     _run(service.register_member_activity(guild, member, channel_id=777))
 
-    # Activity elsewhere is ignored entirely: no reactivation AND no activity
-    # stamp (otherwise the next sweep would flip them back).
+    # No activity stamp either, or the next sweep would flip them back.
     assert member.has(INACTIVE_ROLE_ID)
     assert not member.has(ACTIVE_ROLE_ID)
     assert bot_state.values.get("activity:1:user:10:last_active") is None
@@ -483,8 +480,7 @@ def test_active_member_gets_no_credit_outside_main_channel():
 
     _run(service.register_member_activity(guild, member, channel_id=777))
 
-    # Active status is tracked from main only: activity elsewhere stamps
-    # nothing, so a member who never chats in main drifts inactive.
+    # Activity elsewhere stamps nothing; a member who never chats in main drifts inactive.
     assert bot_state.values.get("activity:1:user:10:last_active") is None
     assert member.has(ACTIVE_ROLE_ID)  # roles untouched by the ignored event
 
@@ -644,8 +640,7 @@ def test_list_inactive_members_shows_role_holders_countdown_first():
 
     rows = _run(service.list_inactive_members(guild))
 
-    # Everyone with the Inactive role appears; soonest scheduled kick first,
-    # parked (no countdown) last.
+    # Soonest scheduled kick first, parked (no countdown) last.
     assert [member.id for member, _ in rows] == [10, 11]
     assert rows[0][1] is not None
     assert rows[1][1] is None
@@ -824,7 +819,6 @@ def test_sync_member_now_ignores_bots():
 
     _run(service.sync_member_now(guild, member))
 
-    # The bot is never handed the Active (or Inactive) role.
     assert not member.has(ACTIVE_ROLE_ID)
     assert not member.has(INACTIVE_ROLE_ID)
 
@@ -839,7 +833,6 @@ def test_register_member_activity_ignores_bots():
 
     _run(service.register_member_activity(guild, member))
 
-    # No activity stamped and no reactivation for a bot.
     assert bot_state.values.get("activity:1:user:10:last_active") is None
     assert member.has(INACTIVE_ROLE_ID)
     assert not member.has(ACTIVE_ROLE_ID)
@@ -920,7 +913,6 @@ def test_afk_command_marks_only_the_author_exempt():
 
     _run(InactivityCog.afk.callback(cog, interaction))
 
-    # Only the caller (id 10) is exempted, and the reply is ephemeral.
     assert _run(service.get_afk_until(1, 10)) is not None
     assert _run(service.get_afk_until(1, 11)) is None
     assert sent.get("ephemeral") is True

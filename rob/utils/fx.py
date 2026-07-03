@@ -10,13 +10,9 @@ import aiohttp
 
 log = logging.getLogger(__name__)
 
-# Offline fallback snapshot of European Central Bank daily reference rates,
-# expressed as "USD per 1 unit of foreign currency".
-#
-# At runtime the bot prefers LIVE rates fetched from the ECB daily feed (see
-# ``refresh_rates`` / ``run_rate_refresher``). This bundled snapshot is only
-# used before the first successful fetch, for currencies the live feed does not
-# list, or if every refresh fails. Snapshot date: 2026-05-31.
+# Offline fallback for the ECB daily reference rates, as USD per 1 unit of
+# foreign currency. Only used before the first live fetch, for currencies the
+# live feed doesn't list, or when every refresh fails. Snapshot date: 2026-05-31.
 STATIC_USD_PER_UNIT: dict[str, Decimal] = {
     "USD": Decimal("1"),
     "EUR": Decimal("1.0900"),
@@ -53,8 +49,7 @@ STATIC_USD_PER_UNIT: dict[str, Decimal] = {
 # ECB publishes one keyless, public daily snapshot of EUR reference rates.
 ECB_DAILY_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
 
-# Live rates older than this are treated as stale and the bundled snapshot is
-# used instead. The refresher runs well inside this window.
+# Live rates older than this are stale; the refresher runs well inside this window.
 _RATES_TTL = timedelta(hours=72)
 _MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
@@ -74,12 +69,7 @@ def _live_is_fresh(now: datetime | None = None) -> bool:
 
 
 def current_rates() -> dict[str, Decimal]:
-    """Return USD-per-unit rates.
-
-    The bundled snapshot is the base so coverage never shrinks; fresh live
-    rates are overlaid on top and take precedence.
-    """
-
+    """Return USD-per-unit rates: the bundled snapshot with fresh live rates overlaid."""
     rates = dict(STATIC_USD_PER_UNIT)
     if _live_rates is not None and _live_is_fresh():
         rates.update(_live_rates)
@@ -87,14 +77,10 @@ def current_rates() -> dict[str, Decimal]:
 
 
 def parse_ecb_rates(xml_text: str) -> dict[str, Decimal]:
-    """Parse the ECB daily reference XML into USD-per-unit rates.
+    """Parse the ECB daily XML into USD-per-unit rates.
 
-    The feed expresses every rate as "units of currency per 1 EUR". We convert
-    to "USD per 1 unit of currency" so all amounts normalise to USD:
-
-        usd_per_unit(X) = usd_per_eur / units_of_X_per_eur
+    The feed lists units-per-EUR; usd_per_unit(X) = usd_per_eur / units_of_X_per_eur.
     """
-
     root = ElementTree.fromstring(xml_text)
     eur_per: dict[str, Decimal] = {}
     for element in root.iter():
@@ -126,7 +112,6 @@ async def fetch_ecb_rates(
     timeout_seconds: float = 10.0,
 ) -> dict[str, Decimal]:
     """Fetch and parse the live ECB daily rates. Raises on any failure."""
-
     own_session = session is None
     session = session or aiohttp.ClientSession()
     try:
@@ -147,13 +132,10 @@ async def refresh_rates(
     session: aiohttp.ClientSession | None = None,
     url: str = ECB_DAILY_URL,
 ) -> bool:
-    """Refresh the cached live rates. Returns ``True`` on success.
+    """Refresh the cached live rates. Returns True on success.
 
-    On any failure the previous cache (or the bundled snapshot) is kept and the
-    function returns ``False`` without raising — currency conversion must never
-    be blocked by a transient network problem.
+    Failures are logged and return False; the previous rates stay in place.
     """
-
     global _live_rates, _live_rates_fetched_at
     try:
         rates = await fetch_ecb_rates(session=session, url=url)
@@ -168,7 +150,6 @@ async def refresh_rates(
 
 async def run_rate_refresher(*, interval_seconds: float = 12 * 60 * 60) -> None:
     """Refresh rates immediately, then on a fixed interval, until cancelled."""
-
     while True:
         await refresh_rates()
         await asyncio.sleep(interval_seconds)

@@ -263,10 +263,7 @@ class BotOpsServer:
         if self.secret:
             provided = request.headers.get("X-Rob-Ops-Secret", "")
             return hmac.compare_digest(provided, self.secret)
-        # Fail closed: with no secret configured, the ops API (which can block
-        # users, edit sends, reissue webhooks, etc.) is only allowed when bound
-        # to loopback. A non-loopback bind without a secret is rejected rather
-        # than served unauthenticated.
+        # Fail closed: with no secret configured, only serve on loopback.
         return self._host_is_loopback(self.host)
 
     async def _handle_health(self, request: web.Request) -> web.Response:
@@ -492,9 +489,8 @@ class BotOpsServer:
     async def _handle_onboarding_webhook_verified(
         self, request: web.Request
     ) -> web.Response:
-        """Auto-advance an in-progress DM onboarding flow when the
-        Throne test webhook arrives. Test-guild-only by spec; the cog
-        also enforces this gate."""
+        """Advance an in-progress DM onboarding flow when the Throne test
+        webhook arrives. Test-guild-only; the cog also enforces the gate."""
 
         if not self._is_authorized(request):
             return web.json_response({"error": "forbidden"}, status=403)
@@ -737,8 +733,7 @@ class BotOpsServer:
 
         service = self.bot.inactivity_service
         summary = await service.backfill_activity_from_history(guild, days=days)
-        # Apply the seeded history: restore Active to now-active members without
-        # DMing or kicking anyone. No-op if the system is not enabled for the guild.
+        # Restore Active to now-active members without DMs or kicks; no-op if disabled.
         snapshots = await service.process_guild(guild, send_notifications=False, perform_kicks=False)
 
         result = {

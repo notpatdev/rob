@@ -1,11 +1,7 @@
-"""Unit tests for :class:`UserDataRepository`.
+"""Tests for UserDataRepository.
 
-There is no Postgres in this test process, so we drive the repo with a fake
-connection that records every ``execute`` (the DELETEs) and ``fetch`` (the
-guild-scan) it runs and returns ``DELETE <n>`` command tags. This lets us
-assert exactly which tables/columns each erasure touches, that ``bot_users`` is
-kept (PII nulled) for block enforcement while ``the_count``/``inactive_users``
-are cleared, and that guild scoping is applied.
+No Postgres here: a fake connection records every execute/fetch and returns
+DELETE <n> command tags, so tests can assert which tables each erasure touches.
 """
 
 from __future__ import annotations
@@ -22,8 +18,7 @@ class _FakeConnection:
         self.fetch_responses = list(fetch_responses or [])
         self.execute_calls: list[tuple[str, tuple]] = []
         self.fetch_calls: list[tuple[str, tuple]] = []
-        # Map a substring -> rows-deleted so individual statements can report
-        # different counts; default is 1 row for any DELETE.
+        # substring -> rows-deleted; default 1 for any DELETE
         self.delete_counts: dict[str, int] = {}
 
     async def execute(self, query: str, *params) -> str:
@@ -83,19 +78,14 @@ def test_delete_everywhere_touches_all_user_tables_and_returns_counts():
         "bot_users_pii_cleared",
         "the_count",
     }
-    # Every statement reported a single affected row in this fake.
     assert all(count == 1 for count in deleted.values())
 
     queries = _queries(connection)
-    # bot_users row is retained for block enforcement, but its PII is nulled
-    # (never hard-deleted).
+    # bot_users is kept for block enforcement; its PII is nulled, never hard-deleted.
     assert "DELETE FROM bot_users" not in queries
     assert "UPDATE bot_users SET discord_username = NULL" in queries
-    # the_count keeps its row but clears the erased user's id.
     assert "UPDATE the_count SET last_user_id = NULL" in queries
-    # inactive_users carries the user's id and is purged outright.
     assert "DELETE FROM inactive_users WHERE discord_user_id = $1" in queries
-    # Terms purged in the everywhere case.
     assert "DELETE FROM user_terms_acceptance WHERE discord_user_id = $1" in queries
 
 
@@ -106,8 +96,8 @@ def test_delete_everywhere_uses_or_clauses_for_dual_role_tables():
     asyncio.run(repo.delete_user_everywhere(555))
     queries = _queries(connection)
 
-    # sends / count_recovery also match the FK id columns (via a subquery on the
-    # user's dommes/subs rows) so no child referencing a parent can survive.
+    # sends / count_recovery also match the FK id columns via subqueries on the
+    # user's dommes/subs rows, so no child row referencing them survives.
     assert "DELETE FROM sends WHERE (domme_user_id = $1 OR sub_user_id = $1" in queries
     assert "OR domme_id IN (SELECT id FROM dommes WHERE discord_user_id = $1" in queries
     assert "OR sub_id IN (SELECT id FROM subs WHERE discord_user_id = $1" in queries
@@ -126,10 +116,9 @@ def test_delete_everywhere_uses_or_clauses_for_dual_role_tables():
 
 
 def test_delete_removes_fk_children_before_parents():
-    # sends.domme_id / sends.sub_id and count_recovery_windows.required_domme_id
-    # are RESTRICT foreign keys into dommes/subs. Deleting a parent while a child
-    # still references it raises ForeignKeyViolationError (seen in production), so
-    # every referencing child must be deleted before the dommes/subs parents.
+    # sends.domme_id/sub_id and count_recovery_windows.required_domme_id are
+    # RESTRICT FKs into dommes/subs; deleting the parent first raised
+    # ForeignKeyViolationError in production.
     connection = _FakeConnection()
     repo = UserDataRepository(_FakeDatabase(connection))
 
@@ -154,7 +143,6 @@ def test_delete_everywhere_has_no_guild_filter_and_wildcards_bot_settings():
 
     asyncio.run(repo.delete_user_everywhere(555))
 
-    # No statement is guild-constrained in the everywhere case.
     assert " AND guild_id = $2" not in _queries(connection)
 
     settings_call = next(
@@ -165,9 +153,7 @@ def test_delete_everywhere_has_no_guild_filter_and_wildcards_bot_settings():
 
 
 def test_delete_everywhere_runs_in_single_transaction():
-    # The fake transaction context yields the same connection; assert the repo
-    # acquired a transaction (not a bare acquire) by checking all DELETEs landed
-    # on one connection and the terms purge is included.
+    # 13 = every per-table statement plus the terms purge, all on one connection.
     connection = _FakeConnection()
     repo = UserDataRepository(_FakeDatabase(connection))
 
@@ -186,7 +172,7 @@ def test_delete_in_guild_constrains_every_statement_and_skips_terms():
 
     deleted = asyncio.run(repo.delete_user_in_guild(555, 4242))
 
-    # Terms is global-only — must not be in the per-guild result.
+    # Terms acceptance is global-only, never per-guild.
     assert "user_terms_acceptance" not in deleted
     assert set(deleted) == {
         "sub_send_names",
@@ -205,7 +191,6 @@ def test_delete_in_guild_constrains_every_statement_and_skips_terms():
 
     queries = _queries(connection)
     assert "user_terms_acceptance" not in queries
-    # Every per-table DELETE carries the guild filter and the guild param.
     table_calls = [
         call
         for call in connection.execute_calls

@@ -1,4 +1,4 @@
-"""Smoke tests for the DM-onboarding Components V2 cards."""
+"""Smoke tests for the DM-onboarding cards."""
 
 from __future__ import annotations
 
@@ -44,7 +44,6 @@ def test_intro_card_has_modal_open_button():
 def test_intro_modal_has_throne_field():
     modal = build_intro_modal()
     assert modal.custom_id == "rob:dm_onboarding:intro:modal"
-    # The TextInput field is a class attribute on the Modal subclass.
     children = list(modal.children)
     assert any(getattr(c, "custom_id", None) == "rob:dm_onboarding:intro:modal:throne_input" for c in children)
 
@@ -57,7 +56,6 @@ def test_identity_confirm_card_has_yes_and_no_buttons():
 
 def test_webhook_setup_card_includes_webhook_url():
     rendered = webhook_setup_card(webhook_url="https://example.com/webhook/abc")
-    # The URL should appear somewhere in the rendered layout view (via TextDisplay).
     found = False
     for item in rendered.view.walk_children():
         if isinstance(item, discord.ui.TextDisplay) and "https://example.com/webhook/abc" in item.content:
@@ -73,11 +71,9 @@ def test_webhook_waiting_card_renders():
 
 def test_preferences_view_defaults_and_save_button():
     view = PreferencesView(default_leaderboard_access=True)
-    # The chosen default is reflected in the access select options.
     access_defaults = [o for o in view.leaderboard_access_select.options if o.default]
     assert access_defaults and access_defaults[0].value == LEADERBOARD_ACCESS_ON_VALUE
 
-    # Save button is exposed via attribute and present in the view tree.
     assert view.save_button.custom_id == "rob:dm_onboarding:prefs:save"
     assert _has_button_with_id(view, "rob:dm_onboarding:prefs:save")
 
@@ -105,7 +101,6 @@ def test_preferences_view_chosen_access_defaults_false_and_reflects_selection():
 
 
 def test_preferences_view_renders_only_the_access_select():
-    # Leaderboard access is the only control on the card now.
     view = PreferencesView(show_leaderboard_access=True)
     rendered_select_ids = {
         item.custom_id
@@ -113,7 +108,6 @@ def test_preferences_view_renders_only_the_access_select():
         if isinstance(item, discord.ui.Select)
     }
     assert rendered_select_ids == {ID_PREFS_LEADERBOARD_ACCESS}
-    # Save button is still present.
     assert _has_button_with_id(view, "rob:dm_onboarding:prefs:save")
 
 
@@ -131,21 +125,13 @@ def test_success_card_messages_reflect_choices():
 
 
 def test_migration_card_has_save_and_defer_buttons_inside_container():
-    # Per spec the visible buttons on the migration card are Save preferences
-    # and Defer for 7 days. The legacy "Open preferences" custom_id is kept
-    # alive via the persistent view registration (see DMOnboardingCog) so
-    # stale DMs in the wild can still be clicked — it is intentionally not
-    # rendered on the new card.
+    # The legacy "Open preferences" custom_id stays registered as a persistent
+    # view (see DMOnboardingCog) so stale DMs still work, but the new card
+    # deliberately doesn't render it.
     rendered = migration_prompt_card()
     assert _has_button_with_id(rendered.view, "rob:dm_migration:save")
     assert _has_button_with_id(rendered.view, "rob:dm_migration:defer_7d")
     assert not _has_button_with_id(rendered.view, "rob:dm_migration:open_prefs")
-
-
-# ---------------------------------------------------------------------------
-# Layout regression: literal divider text is gone, action rows live inside
-# the Container, and bound callbacks route to the cog.
-# ---------------------------------------------------------------------------
 
 
 import asyncio  # noqa: E402
@@ -195,7 +181,7 @@ def _container_button_ids(view):
 )
 def test_no_literal_divider_text(rendered):
     text = _all_text(rendered.view)
-    # The bug we are fixing: literal em-dash dividers were rendered as text.
+    # Regression: dividers were once rendered as literal em-dash text.
     assert "——" not in text
     assert "——————————————" not in text
 
@@ -237,8 +223,7 @@ def test_action_buttons_live_inside_container(rendered, expected_ids):
         )
 
 
-# When the user clicks a button, the LIVE LayoutView's bound callback must
-# delegate to the cog. Without this binding, discord.py's default no-op
+# Buttons must delegate to the cog; otherwise discord.py's default no-op
 # callback fires and Discord shows "This interaction failed".
 
 
@@ -287,8 +272,7 @@ def test_button_callback_routes_to_cog(button_cls, handler_name):
     asyncio.run(btn.callback(interaction))
     handler = getattr(cog, handler_name)
     if getattr(btn, "_PASS_VIEW", False):
-        # Save buttons hand the live view to the cog so it can read the
-        # user's current selection (the message components only carry defaults).
+        # Save buttons pass the live view; message components only carry defaults.
         handler.assert_awaited_once_with(interaction, view=btn.view)
     else:
         handler.assert_awaited_once_with(interaction)
@@ -298,14 +282,12 @@ def test_button_callback_without_cog_responds_gracefully():
     btn = OpenModalButton(None)
     interaction = _fake_interaction()
     asyncio.run(btn.callback(interaction))
-    # The button must respond to the interaction (otherwise Discord shows
-    # "This interaction failed"). It also must not raise.
+    # Must still respond, or Discord shows "This interaction failed".
     interaction.response.send_message.assert_awaited_once()
 
 
 def test_preferences_view_selects_ack_interactions():
-    # Each select must respond (defer) when the user changes a value, so
-    # Discord doesn't show "This interaction failed" mid-preference-selection.
+    # Selects must defer, or Discord shows "This interaction failed" mid-selection.
     view = preferences_card().view
     interaction = _fake_interaction()
     asyncio.run(view.leaderboard_access_select.callback(interaction))

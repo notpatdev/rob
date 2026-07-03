@@ -1,9 +1,7 @@
-"""Central guild ID constants and gating helpers.
+"""Guild id constants and gating helpers.
 
-All new functionality that is scoped to the test guild ONLY should consult
-``is_test_guild`` before mutating shared bot state, sending DMs, etc.
-
-Outside of ``TEST_GUILD_ID`` the existing main-server behavior is preserved.
+Test-guild-only features should gate on is_test_guild; other guilds keep the
+existing main-server behavior.
 """
 
 from __future__ import annotations
@@ -11,15 +9,12 @@ from __future__ import annotations
 MAIN_GUILD_ID: int = 1485460387355820034
 TEST_GUILD_ID: int = 1506597978251591813
 
-# The bot operator's Discord *user* id (the human who runs Rob). This is who
-# /report submissions are DM'd to. Intentionally NOT the Discord application
-# owner from application_info(), which can be a team account or have DMs closed.
+# The operator's Discord user id; /report DMs go here. Deliberately not the
+# application_info() owner, which can be a team account or have DMs closed.
 OWNER_USER_ID: int = 1299308718009356289
 
-# "DO NOT TOUCH" users. Rob's member-lifecycle automations (the inactivity
-# system: Active/Inactive role swaps, inactivity DMs, and auto-kicks) must never
-# act on these accounts; instead they are kept Active and left in place. Seeded
-# with a deceased member whose account is preserved as a memorial.
+# "DO NOT TOUCH" accounts: the inactivity system must never role-swap, DM, or
+# kick these; they stay Active. Seeded with a deceased member kept as a memorial.
 PROTECTED_USER_IDS: frozenset[int] = frozenset(
     {
         1455563825393832095,
@@ -28,39 +23,29 @@ PROTECTED_USER_IDS: frozenset[int] = frozenset(
 
 
 def is_test_guild(guild_id: int | None) -> bool:
-    """Return ``True`` when ``guild_id`` matches the test guild.
-
-    ``None`` (and any other non-matching guild id) returns ``False`` so that
-    callers can safely use this as the only gate for test-server-only paths.
-    """
-
+    """True when guild_id matches the test guild; None returns False."""
     if guild_id is None:
         return False
     return int(guild_id) == TEST_GUILD_ID
 
 
 def is_main_guild(guild_id: int | None) -> bool:
-    """Return ``True`` when ``guild_id`` matches the production main guild."""
-
+    """True when guild_id matches the production main guild."""
     if guild_id is None:
         return False
     return int(guild_id) == MAIN_GUILD_ID
 
 
 def is_new_system_guild(guild_id: int | None) -> bool:
-    """Guilds where Rob's newer systems are live (main + test): the Dom/me
-    onboarding + preferences + leaderboard-access system, and the activity /
-    inactive-role + hourly server-backup systems. Each was test-guild-only during
-    development and promoted to the main guild here."""
+    """Guilds where the newer systems (Dom/me onboarding, leaderboard access,
+    inactivity, hourly backups) are live: main + test."""
     if guild_id is None:
         return False
     return is_main_guild(guild_id) or is_test_guild(guild_id)
 
 
 def is_protected_user(user_id: int | None) -> bool:
-    """Return ``True`` for "DO NOT TOUCH" accounts that Rob's member-lifecycle
-    automations must never act on (never kicked, never marked inactive)."""
-
+    """True for "DO NOT TOUCH" accounts exempt from member-lifecycle automations."""
     if user_id is None:
         return False
     return int(user_id) in PROTECTED_USER_IDS

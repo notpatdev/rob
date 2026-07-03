@@ -1,15 +1,6 @@
-"""Per-guild inactive-member countdown + watchlist.
-
-Rows in ``inactive_users`` track members who have lost the Active role and been
-given the Inactive role: when the Inactive role was assigned, when Rob will kick
-them if they stay inactive (``remove_at``), and whether the first / final notice
-DMs have gone out. The activity *signal* itself (last message / interaction) is
-recorded separately as a lightweight ``activity:{guild}:user:{uid}:last_active``
-key in ``bot_settings`` by the activity tracker.
-
-``/inactivelist`` reads this table for the mod-facing summary, and the
-``/forgetme`` erasure path already deletes a user's rows here.
-"""
+"""Per-guild inactive-member watchlist: when the Inactive role was assigned,
+the kick deadline (remove_at), and notice-DM flags. The activity signal itself
+lives in bot_settings under activity:{guild}:user:{uid}:last_active."""
 
 from __future__ import annotations
 

@@ -30,10 +30,7 @@ def _build_compat_creator(row: Record) -> ThroneCreator:
 
 
 class ThroneCreatorsRepository:
-    """
-    Compatibility wrapper for legacy call sites.
-    v2 stores creator/webhook tracking fields directly on `dommes`.
-    """
+    """Compatibility wrapper for legacy call sites; v2 keeps these fields on dommes."""
 
     def __init__(self, database: Database) -> None:
         self.database = database

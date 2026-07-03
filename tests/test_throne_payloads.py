@@ -39,9 +39,8 @@ def test_real_sender_not_known_test_sender():
 
 
 def test_fallback_hash_is_stable_when_timestamp_missing():
-    # Throne delivers at-least-once. A retried event with no timestamp must
-    # hash identically both times so the duplicate de-duplicates; previously the
-    # now() default made each retry hash differently.
+    # Throne delivers at-least-once; the old now() default gave each retry a
+    # different hash, so retried events without a timestamp dodged dedup.
     base = {
         "type": "gift_purchased",
         "data": {"price": 1099, "currency": "USD", "gifter_username": "sub", "orderId": "o1"},
@@ -88,8 +87,7 @@ def test_amount_cents_rounds_decimal_string():
 
 
 def test_amount_cents_half_cent_tie_rounds_half_up_not_bankers():
-    # 1098.5 -> 1099 with ROUND_HALF_UP; float + builtin round() would give 1098
-    # (banker's rounding to the even value).
+    # ROUND_HALF_UP gives 1099; builtin round() would banker's-round to 1098.
     parsed = parse_throne_send_payload(
         creator_id="c",
         payload={"type": "gift_purchased", "data": {"amountCents": "1098.5", "currency": "USD"}},

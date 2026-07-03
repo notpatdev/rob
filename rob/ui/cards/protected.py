@@ -14,10 +14,8 @@ def protected_member_card(
 ) -> RenderedMessage:
     """Memorial card announcing that a member's account is protected.
 
-    The body shows the member's mention (the sender should pass
-    ``allowed_mentions`` so it does not ping the account). ``view`` is the
-    LayoutView the caller renders into and then attaches the GoFundMe link
-    button to.
+    The sender should pass allowed_mentions so the body's mention does not
+    ping the account; view is where the caller attaches the GoFundMe button.
     """
     body = (
         "In loving memory of Aly, "

@@ -1,23 +1,7 @@
-"""Privacy / right-to-erasure repository.
+"""Right-to-erasure: delete all of a user's Rob data, everywhere or per guild.
 
-:class:`UserDataRepository` removes *all* of a Discord user's Rob data, either
-everywhere (all guilds) or scoped to a single guild.
-
-``bot_users`` is the one row that is not deleted: it carries the allow/block
-status, and a blocked user must stay blocked even after erasing the rest of
-their footprint. We do, however, null the PII it holds (``discord_username`` /
-``discord_display_name``) so only the ``(guild_id, discord_user_id, status)``
-tuple needed for block enforcement remains. ``the_count.last_user_id`` is nulled
-when it points at the erased user (it would otherwise retain their id until the
-next count), and ``inactive_users`` rows are deleted outright.
-
-Every erasure runs inside a single transaction so a partial wipe can never be
-left behind. Each method returns a ``{table: rows_deleted}`` mapping for the
-caller to surface in the confirmation summary and the audit log.
-
-The set of tables / columns mirrors the v2 build scripts under
-``scripts/db/build`` (001 core, 004 sub send names, 005 count recovery,
-006 send change requests, 008 dm preferences, 009 terms acceptance).
+bot_users is kept (a blocked user must stay blocked) with its PII nulled;
+everything else is deleted in one transaction. Tables mirror scripts/db/build.
 """
 
 from __future__ import annotations
@@ -28,8 +12,7 @@ from rob.database.connection import Database
 
 
 def _rows_affected(status: str) -> int:
-    """Parse asyncpg's ``DELETE <n>`` command tag into ``<n>``."""
-
+    """Parse the trailing count from an asyncpg command tag like "DELETE 3"."""
     parts = status.split()
     if not parts:
         return 0
@@ -46,12 +29,8 @@ class UserDataRepository:
     # -- public API -----------------------------------------------------------
 
     async def delete_user_everywhere(self, discord_user_id: int) -> dict[str, int]:
-        """Hard-delete every row tied to ``discord_user_id`` across all guilds.
-
-        Runs in one transaction. ``user_terms_acceptance`` (which is not
-        guild-scoped) is purged here as well. Returns ``{table: rows_deleted}``.
-        """
-
+        """Delete every row for the user across all guilds, including
+        user_terms_acceptance. Returns {table: rows_deleted}."""
         async with self.database.transaction() as connection:
             deleted = await self._delete_guild_scoped(
                 connection,
@@ -69,13 +48,8 @@ class UserDataRepository:
     async def delete_user_in_guild(
         self, discord_user_id: int, guild_id: int
     ) -> dict[str, int]:
-        """Hard-delete every row tied to ``discord_user_id`` within ``guild_id``.
-
-        Every DELETE is additionally constrained by ``guild_id``. The
-        ``user_terms_acceptance`` table has no guild column, so it is left alone
-        in the single-guild case. Returns ``{table: rows_deleted}``.
-        """
-
+        """Delete every row for the user within guild_id. user_terms_acceptance
+        has no guild column and is left alone here. Returns {table: rows_deleted}."""
         async with self.database.transaction() as connection:
             return await self._delete_guild_scoped(
                 connection,
@@ -85,13 +59,7 @@ class UserDataRepository:
 
     async def guilds_with_user_data(self, discord_user_id: int) -> list[int]:
         """Return the distinct guild ids where the user has any Rob data.
-
-        Used to decide whether the ``/forgetme`` confirmation should offer a
-        "this server vs everywhere" scope choice. ``user_terms_acceptance`` is
-        intentionally excluded because it carries no guild and would not change
-        the per-guild decision.
-        """
-
+        user_terms_acceptance is excluded (no guild column)."""
         async with self.database.acquire() as connection:
             rows = await connection.fetch(
                 """
@@ -132,36 +100,19 @@ class UserDataRepository:
         discord_user_id: int,
         guild_id: int | None,
     ) -> dict[str, int]:
-        """Run every guild-scoped DELETE for the user on ``connection``.
+        """Run the guild-scoped deletes for the user; guild_id=None means all guilds.
 
-        When ``guild_id`` is ``None`` the deletes span all guilds (the
-        "everywhere" case); otherwise each statement is additionally constrained
-        to ``guild_id``. ``user_terms_acceptance`` is *not* handled here — it has
-        no guild column and is only purged in the everywhere case by the caller.
-
-        Order matters. ``sends`` and ``count_recovery_windows`` hold restrict
-        foreign keys into ``dommes``/``subs`` (``sends.domme_id``,
-        ``sends.sub_id``, ``count_recovery_windows.required_domme_id``), so the
-        referencing rows must be deleted *before* the ``dommes``/``subs``
-        parents or Postgres raises a ``ForeignKeyViolationError``. Those deletes
-        also match on the FK id columns (not just the denormalised ``*_user_id``
-        columns) so no child row can survive to block the parent delete.
-        ``sub_send_names`` (cascade) and ``send_change_requests`` (set-null on
-        ``sends``) impose no ordering, but the parents still go last.
+        Order matters: sends and count_recovery_windows hold restrict FKs into
+        dommes/subs, so children go before parents, matching both the
+        denormalised user ids and the FK ids.
         """
-
-        # ``$2`` is only referenced when guild_filter is non-empty, so the
-        # parameter tuple is built to match.
+        # $2 is only referenced when guild_filter is non-empty.
         guild_filter = "" if guild_id is None else " AND guild_id = $2"
         scope: tuple = (discord_user_id,) if guild_id is None else (discord_user_id, guild_id)
 
         deleted: dict[str, int] = {}
 
-        # --- children that reference dommes/subs: delete before the parents ---
-
-        # sends.domme_id -> dommes(id) and sends.sub_id -> subs(id) (restrict).
-        # Match the user's denormalised ids *and* the FK ids of their dommes/subs
-        # rows so nothing referencing a soon-to-be-deleted parent survives.
+        # sends.domme_id -> dommes(id), sends.sub_id -> subs(id) (restrict).
         deleted["sends"] = _rows_affected(
             await connection.execute(
                 "DELETE FROM sends WHERE ("
@@ -182,9 +133,7 @@ class UserDataRepository:
                 *scope,
             )
         )
-        # sub_send_names.sub_id -> subs(id) ON DELETE CASCADE, but deleted
-        # explicitly first so the returned count is accurate and the wipe does
-        # not rely on cascade being enabled in every environment.
+        # Cascades from subs, but deleted explicitly so the count is accurate.
         deleted["sub_send_names"] = _rows_affected(
             await connection.execute(
                 f"DELETE FROM sub_send_names WHERE discord_user_id = $1{guild_filter}",
@@ -192,10 +141,7 @@ class UserDataRepository:
             )
         )
 
-        # --- tables with no restrict FK into the parents ---
-
-        # send_change_requests.{target,approved}_send_id -> sends(id) is
-        # ON DELETE SET NULL, so its order relative to sends does not matter.
+        # send_change_requests FKs into sends are SET NULL; order doesn't matter.
         deleted["send_change_requests"] = _rows_affected(
             await connection.execute(
                 "DELETE FROM send_change_requests "
@@ -216,7 +162,7 @@ class UserDataRepository:
             )
         )
 
-        # --- parents: deleted only after every referencing row above is gone ---
+        # Parents last, after every referencing row above is gone.
         deleted["subs"] = _rows_affected(
             await connection.execute(
                 f"DELETE FROM subs WHERE discord_user_id = $1{guild_filter}",
@@ -236,7 +182,6 @@ class UserDataRepository:
             guild_id=guild_id,
         )
 
-        # inactive_users carries the user's discord id; purge it outright.
         deleted["inactive_users"] = _rows_affected(
             await connection.execute(
                 f"DELETE FROM inactive_users WHERE discord_user_id = $1{guild_filter}",
@@ -244,7 +189,7 @@ class UserDataRepository:
             )
         )
 
-        # bot_users is kept for block enforcement, but its PII is cleared.
+        # bot_users stays for block enforcement; only its PII is cleared.
         deleted["bot_users_pii_cleared"] = _rows_affected(
             await connection.execute(
                 "UPDATE bot_users SET discord_username = NULL, "
@@ -253,7 +198,7 @@ class UserDataRepository:
             )
         )
 
-        # the_count only stores the last counter's id; null it if it's the user.
+        # the_count only stores the last counter's id; null it if it's this user.
         the_count_filter = "" if guild_id is None else " AND guild_id = $2"
         deleted["the_count"] = _rows_affected(
             await connection.execute(
@@ -270,15 +215,11 @@ class UserDataRepository:
         discord_user_id: int,
         guild_id: int | None,
     ) -> int:
-        """Delete per-user ``bot_settings`` key/value rows.
+        """Delete per-user bot_settings rows (activity:/inactivity: key prefixes).
 
-        Keys follow ``activity:{guild}:user:{uid}:%`` and
-        ``inactivity:{guild}:user:{uid}:%``. When ``guild_id`` is ``None`` the
-        ``{guild}`` segment is wildcarded so every guild's per-user keys go.
-        The guild and user ids are integers, so the LIKE patterns carry no
-        wildcard or escape characters of their own.
+        guild_id=None wildcards the guild segment. Both ids are integers, so
+        the LIKE patterns carry no stray wildcard characters.
         """
-
         guild_segment = "%" if guild_id is None else str(int(guild_id))
         uid = int(discord_user_id)
         activity_pattern = f"activity:{guild_segment}:user:{uid}:%"

@@ -1,8 +1,4 @@
-"""Runtime wiring tests for the DM-based Dom/me onboarding cog.
-
-These tests cover the cog handlers + the /register domme routing in the
-test guild only. Network-side discord.py behavior is mocked.
-"""
+"""Wiring tests for the DM-based Dom/me onboarding cog. discord.py is mocked."""
 
 from __future__ import annotations
 
@@ -184,7 +180,6 @@ def test_start_onboarding_dm_outside_new_system_guild_returns_error():
 
 
 def test_start_onboarding_dm_main_guild_sends_intro():
-    # The new onboarding flow is now live on the main guild too.
     bot = _FakeBot()
     cog = DMOnboardingCog(bot)
     user = _FakeUser(user_id=7, name="Aria")
@@ -211,7 +206,6 @@ def test_start_onboarding_dm_test_guild_sends_intro_and_stores_message():
     bot.dm_onboarding_service.start.assert_awaited_once_with(
         guild_id=TEST_GUILD_ID, discord_user_id=7
     )
-    # The intro DM was sent and its ids were persisted.
     assert len(user.sent_messages) == 1
     assert bot.domme_onboarding_repo.set_dm_message_calls
     call = bot.domme_onboarding_repo.set_dm_message_calls[0]
@@ -262,7 +256,6 @@ def test_handle_open_modal_uses_stored_guild_id_in_dm_context():
 
 
 def test_handle_open_modal_in_main_guild_sends_modal():
-    # The new onboarding flow is now live on the main guild too.
     bot = _FakeBot()
     cog = DMOnboardingCog(bot)
     interaction = _make_interaction(guild_id=MAIN_GUILD_ID)
@@ -309,7 +302,6 @@ def test_handle_modal_submit_edits_stored_dm_with_identity_card():
     bot.dm_onboarding_service.submit_throne_input.assert_awaited_once_with(
         guild_id=TEST_GUILD_ID, discord_user_id=42, throne_input="aria"
     )
-    # The stored DM message was edited (identity card).
     assert dm_message.edits, "stored DM message should be edited with identity card"
 
 
@@ -336,7 +328,6 @@ def test_handle_modal_submit_returns_error_card_on_resolution_failure():
             interaction, guild_id=TEST_GUILD_ID, throne_input="bad"
         )
     )
-    # The error card was edited into the stored DM.
     assert dm_message.edits, "error card should be rendered into the stored DM"
 
 
@@ -430,7 +421,6 @@ def test_handle_save_preferences_persists_and_renders_success_card():
         user=user,
     )
     user._last_message = dm_message
-    # Build a fake message with components that the helper can read.
     select_access = SimpleNamespace(
         custom_id=ID_PREFS_LEADERBOARD_ACCESS, values=[LEADERBOARD_ACCESS_ON_VALUE]
     )
@@ -453,10 +443,8 @@ def test_handle_save_preferences_persists_and_renders_success_card():
 
 
 def test_handle_save_preferences_grants_access_from_live_view(monkeypatch):
-    # Regression: the Save button hands the live view to the handler so the
-    # user's leaderboard-access choice is honored. Previously the handler read
-    # the message components, which only carry the default ("off"), so the
-    # access role was never granted during /register domme onboarding.
+    # Regression: the handler must read the live view, not the message
+    # components, which only carry the default ("off").
     user = _FakeUser(user_id=42)
     bot = _FakeBot(
         onboarding_state=SimpleNamespace(
@@ -479,8 +467,7 @@ def test_handle_save_preferences_grants_access_from_live_view(monkeypatch):
         "rob.discord.cogs.dm_onboarding.apply_leaderboard_access", _fake_apply
     )
 
-    # User picked "give me access" on the live view; the message components
-    # still carry only the default ("off"), proving we read the view.
+    # The live view says "on"; the message components still say "off".
     view = PreferencesView(default_leaderboard_access=False)
     view.leaderboard_access_select._values = [LEADERBOARD_ACCESS_ON_VALUE]
 
@@ -526,8 +513,8 @@ def test_on_throne_test_webhook_received_advances_dm_to_preferences():
 
 
 def test_on_throne_test_webhook_received_outside_new_system_guild_is_noop():
-    # A live onboarding row exists, but the guild is neither main nor test, so
-    # the gate (not the missing-state path) must short-circuit the auto-advance.
+    # A live onboarding row exists, so the guild gate (not the missing-state
+    # path) must short-circuit the auto-advance.
     bot = _FakeBot(
         onboarding_state=SimpleNamespace(
             guild_id=OTHER_GUILD_ID,
@@ -547,7 +534,6 @@ def test_on_throne_test_webhook_received_outside_new_system_guild_is_noop():
 
 
 def test_on_throne_test_webhook_received_advances_dm_in_main_guild():
-    # The new onboarding flow auto-advances on the main guild now too.
     dm_message = _FakeMessage()
     user = _FakeUser(user_id=42)
     bot = _FakeBot(
@@ -592,13 +578,12 @@ def test_on_throne_test_webhook_received_handles_completed_state():
 
 
 # ---------------------------------------------------------------------------
-# Missing/deleted DM is handled gracefully
+# Missing/deleted DM
 # ---------------------------------------------------------------------------
 
 
 def test_missing_dm_during_edit_does_not_raise():
     user = _FakeUser(user_id=42)
-    # message.edit raises NotFound on every attempt.
     bot = _FakeBot(
         onboarding_state=SimpleNamespace(
             guild_id=TEST_GUILD_ID,
@@ -617,7 +602,6 @@ def test_missing_dm_during_edit_does_not_raise():
 
     user.dm_channel = _DeadDMChannel()
     cog = DMOnboardingCog(bot)
-    # Call directly via the helper to verify it returns False instead of raising.
     from rob.ui.cards.dm_onboarding import success_card
 
     ok = asyncio.run(
@@ -727,7 +711,6 @@ def test_register_domme_routes_to_dm_cog_in_test_guild():
 
 
 def test_register_domme_routes_to_dm_cog_in_main_guild():
-    # The new DM-first onboarding flow is now live on the main guild too.
     from unittest.mock import patch
 
     from rob.discord.cogs.registration import RegistrationCog
@@ -811,7 +794,6 @@ def test_register_domme_uses_legacy_flow_outside_new_system_guild():
 
 def test_read_prefs_from_interaction_defaults_when_no_data():
     interaction = SimpleNamespace(view=None, message=None)
-    # Returns leaderboard_access, defaulting to False.
     assert _read_prefs_from_interaction(interaction) is False
 
 
@@ -844,7 +826,6 @@ def test_notify_bot_onboarding_webhook_verified_derives_endpoint(notify_url):
     from rob.services.bot_notify_client import notify_bot_onboarding_webhook_verified
     from urllib.parse import urlsplit
 
-    # We don't want to make real HTTP calls; mock ClientSession.
     import rob.services.bot_notify_client as mod
     from unittest.mock import patch
 

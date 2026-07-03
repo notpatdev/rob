@@ -63,13 +63,11 @@ def is_supported_event_type(event_type: str | None) -> bool:
 
 
 def parse_timestamp_opt(value: Any) -> datetime | None:
-    """Parse a timestamp, returning ``None`` when it is missing or unparseable.
+    """Return None for a missing or unparseable timestamp.
 
-    Used by the fallback dedup hash, which must stay stable across Throne's
-    at-least-once retries — folding in a ``now()`` default would make every
-    retry hash differently and defeat de-duplication.
+    The fallback dedup hash must stay stable across Throne's at-least-once
+    retries, so this must not default to now().
     """
-
     if value is None:
         return None
 
@@ -95,12 +93,8 @@ def parse_timestamp(value: Any) -> datetime:
 
 
 def _to_int_cents(value: Any) -> int:
-    """Round a minor-unit (cents) money value to an int.
-
-    Uses Decimal + ROUND_HALF_UP (no float) so fractional-cent inputs round the
-    same way as the FX path and dollars_to_cents, instead of float imprecision +
-    banker's rounding (e.g. round(1098.5) -> 1098).
-    """
+    """Round minor-unit money to int cents with Decimal ROUND_HALF_UP, matching
+    the FX path; float round() would give round(1098.5) -> 1098."""
     if value is None:
         return 0
     text = str(value).strip().replace("$", "").replace(",", "")
@@ -126,9 +120,8 @@ def build_fallback_hash(
     amount_cents: int,
     currency: str,
 ) -> str:
-    # ``purchased_at`` is ``None`` when Throne didn't send a parseable
-    # timestamp; we omit it from the hash rather than substitute ``now()`` so
-    # retries of the same event produce the same hash (and de-duplicate).
+    # purchased_at is None when Throne sent no parseable timestamp; omit it
+    # rather than substitute now() so retries of the same event hash the same.
     raw = "|".join(
         [
             creator_id,
@@ -141,8 +134,6 @@ def build_fallback_hash(
         ]
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
 
 
 def _as_bool(value: Any) -> bool | None:
@@ -336,9 +327,8 @@ def parse_throne_send_payload(
         item.get("amount_cents"),
     )
     if amount_source is not None:
-        # Throne usually sends integer cents, but tolerate decimal/float-like
-        # values ("1099", "1099.5") without raising out of the webhook handler,
-        # using Decimal half-up rounding (no float) for money correctness.
+        # Throne usually sends integer cents, but decimal/float-like values
+        # ("1099.5") show up too; must not raise out of the webhook handler.
         amount_cents = _to_int_cents(amount_source)
     else:
         amount_cents = _money_to_cents(

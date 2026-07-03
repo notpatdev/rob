@@ -1,15 +1,7 @@
-"""Local speech-to-text for Discord voice messages.
+"""Local speech-to-text for Discord voice messages via faster-whisper.
 
-Transcription runs entirely on the host with `faster-whisper
-<https://github.com/SYSTRAN/faster-whisper>`_ — a small CTranslate2 Whisper
-model, no GPU or external API required. ``faster-whisper`` is an *optional*
-dependency (see ``requirements-voice.txt``); it is imported lazily so the bot
-runs fine without it, and the feature stays disabled until the operator installs
-it and sets ``VOICE_TRANSCRIBE_ENABLED=true``.
-
-All model work is blocking/CPU-bound and is therefore dispatched to a worker
-thread via :func:`asyncio.to_thread`, and serialised with a semaphore, so the
-Discord event loop never stalls.
+faster-whisper is an optional dependency (requirements-voice.txt), imported
+lazily. Model work is CPU-bound and runs in a worker thread behind a semaphore.
 """
 
 from __future__ import annotations
@@ -23,9 +15,8 @@ from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
-# After a *transient* model-load failure (e.g. a network blip while downloading
-# the model), wait this long before trying to load again rather than disabling
-# the feature until restart.
+# Wait after a transient model-load failure (e.g. a download blip) instead of
+# disabling the feature until restart.
 _LOAD_RETRY_BACKOFF_SECONDS = 300
 
 
@@ -64,8 +55,7 @@ class TranscriptionService:
 
     @property
     def available(self) -> bool:
-        """Whether transcription can currently run: enabled, the dependency is
-        present, and we're not inside a post-failure retry back-off."""
+        """Enabled, dependency present, and not in retry back-off."""
         if not self.enabled or self._permanent_fail:
             return False
         if self._model is not None:
@@ -98,14 +88,13 @@ class TranscriptionService:
             try:
                 model = await asyncio.to_thread(self._load_model_blocking)
             except Exception as exc:
-                # Transient load failure (e.g. download/IO hiccup): back off and
-                # retry on a later voice message rather than disabling forever.
+                # Transient failure (download/IO): back off, retry on a later message.
                 hint = ""
                 if isinstance(exc, PermissionError):
                     hint = (
                         " The model cache directory is not writable by the bot "
                         "user — set VOICE_TRANSCRIBE_DOWNLOAD_ROOT to a directory "
-                        "the bot owns (see docs/tldr-and-voice-transcription.md)."
+                        "the bot owns (see docs/voice-transcription.md)."
                     )
                 log.exception(
                     "Failed to load Whisper model %s; retrying in %ss.%s",
@@ -116,18 +105,15 @@ class TranscriptionService:
                 self._retry_after = time.monotonic() + _LOAD_RETRY_BACKOFF_SECONDS
                 return None
             if model is None:
-                # Missing dependency: hopeless, never retry.
+                # Missing dependency: never retry.
                 self._permanent_fail = True
             self._model = model
             return model
 
     def _load_model_blocking(self):
-        # download_root only controls where the model files land; huggingface's
-        # transfer backend (xet) keeps its own cache/logs under HF_HOME, which
-        # defaults to ~/.cache — unwritable when the bot user's home is locked
-        # down. Point HF_HOME inside download_root too (before huggingface_hub
-        # is first imported, which is when it reads the env) unless the
-        # operator/systemd unit already set one.
+        # huggingface's xet backend caches under HF_HOME (default ~/.cache, often
+        # unwritable for the bot user), so point it inside download_root before
+        # huggingface_hub is first imported, unless the operator already set it.
         if self.download_root:
             os.environ.setdefault(
                 "HF_HOME", os.path.join(self.download_root, "huggingface")
@@ -141,8 +127,7 @@ class TranscriptionService:
                 "`pip install faster-whisper`) and restart the bot."
             )
             return None
-        # Any other load error propagates to _ensure_model, which treats it as
-        # transient and schedules a retry rather than disabling permanently.
+        # Other load errors propagate to _ensure_model and are treated as transient.
         log.info(
             "Loading Whisper model %s (device=%s, compute_type=%s) for voice transcription.",
             self.model_name,

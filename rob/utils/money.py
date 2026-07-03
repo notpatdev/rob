@@ -36,9 +36,8 @@ CURRENCY_NAMES = {
 }
 
 def dollars_to_cents(amount: float | int | str) -> int:
-    # Decimal + ROUND_HALF_UP so half-cent inputs round consistently with the
-    # FX conversion path (rob/utils/fx.py); plain ``round`` uses banker's
-    # rounding on a binary float (e.g. 2.675 -> 267).
+    # ROUND_HALF_UP to match the FX path (rob/utils/fx.py); plain round() does
+    # banker's rounding on a binary float (2.675 -> 267).
     return int((Decimal(str(amount)) * 100).to_integral_value(rounding=ROUND_HALF_UP))
 
 def format_money_from_cents(amount_cents: int, currency: str = "USD") -> str:

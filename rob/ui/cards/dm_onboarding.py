@@ -1,27 +1,8 @@
-"""Components V2 cards for the DM-based Dom/me onboarding flow.
+"""Components V2 cards for the DM Dom/me onboarding flow.
 
-All cards here are for the new-system guilds (main + test). Gating to
-``is_new_system_guild`` is the caller's responsibility. The interaction handlers live on
-:class:`rob.discord.cogs.dm_onboarding.DMOnboardingCog` and the
-orchestration on :class:`rob.services.dm_onboarding_service.DMOnboardingService`.
-
-Each card returns a :class:`~rob.ui.render.RenderedMessage` whose ``view``
-is a :class:`~discord.ui.LayoutView` ready to be sent or edited into the
-ongoing DM message.
-
-Interaction model
------------------
-
-Every interactive button used in the flow lives inside a
-:class:`discord.ui.ActionRow` *inside* a :class:`discord.ui.Container` (so
-it visually sits in the bottom-left of the card) and is implemented by a
-small :class:`discord.ui.Button` subclass with a ``callback`` bound to the
-cog. The card builders accept an optional ``cog`` keyword and pass it
-through to the buttons. When no cog is supplied (e.g. tests, or a stale
-DM rebuilt without a runtime cog reference) the button responds with a
-clear ephemeral notice instead of timing out — that prevents the
-"This interaction failed" message Discord shows when no response is sent
-within ~3 seconds.
+New-system guilds only; gating on is_new_system_guild is the caller's job.
+Buttons built without a live cog reply with an ephemeral notice, since Discord
+shows "This interaction failed" if nothing responds within ~3 seconds.
 """
 
 from __future__ import annotations
@@ -37,10 +18,7 @@ from rob.ui.theme import COLOR_INFO, COLOR_SUCCESS, COLOR_WARNING
 log = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Stable custom IDs — kept stable so persistent views can re-bind callbacks
-# after a restart.
-# ---------------------------------------------------------------------------
+# Custom IDs are stable so persistent views can re-bind after a restart.
 ONBOARDING_PREFIX = "rob:dm_onboarding:"
 ID_INTRO_OPEN_MODAL = f"{ONBOARDING_PREFIX}intro:open_modal"
 ID_INTRO_MODAL = f"{ONBOARDING_PREFIX}intro:modal"
@@ -57,7 +35,6 @@ ID_MIGRATION_DEFER = f"{MIGRATION_PREFIX}defer_7d"
 ID_MIGRATION_LEADERBOARD_ACCESS = f"{MIGRATION_PREFIX}leaderboard_access"
 ID_MIGRATION_SAVE = f"{MIGRATION_PREFIX}save"
 
-# Preference option values stored on each ``SelectOption``.
 LEADERBOARD_ACCESS_ON_VALUE = "leaderboard_access_on"
 LEADERBOARD_ACCESS_OFF_VALUE = "leaderboard_access_off"
 
@@ -68,14 +45,7 @@ LEADERBOARD_ACCESS_OFF_VALUE = "leaderboard_access_off"
 
 
 def _progress(step: int, total: int = 5) -> str:
-    """Return a subtle one-line progress indicator, e.g.
-
-    ``-# Step 2 of 5  ▰▰▱▱▱``
-
-    Rendered as Discord small text so it sits quietly above the heading and
-    helps the Dom/me see how far through setup they are.
-    """
-
+    """One-line progress indicator in Discord small text, e.g. "-# Step 2 of 5  ▰▰▱▱▱"."""
     step = max(0, min(step, total))
     filled = "▰" * step
     empty = "▱" * (total - step)
@@ -96,12 +66,7 @@ _UNAVAILABLE_MESSAGE = (
 
 
 async def _unavailable(interaction: discord.Interaction) -> None:
-    """Fallback handler for buttons rendered without a live cog binding.
-
-    We must respond to the interaction before Discord's 3s timeout, otherwise
-    the user sees "This interaction failed". Logging makes it diagnosable.
-    """
-
+    """Fallback for buttons with no live cog; must respond within Discord's 3s deadline."""
     data = getattr(interaction, "data", None) or {}
     if isinstance(data, dict):
         custom_id = data.get("custom_id")
@@ -124,15 +89,12 @@ async def _unavailable(interaction: discord.Interaction) -> None:
 
 
 class _BoundButton(discord.ui.Button):
-    """Persistent button whose callback delegates to a named cog method.
-
-    ``cog`` is intentionally duck-typed (``Any``) so this module stays free
-    of cog-side imports. The cog method receives the raw ``interaction``.
-    """
+    """Persistent button that delegates to a named cog method. cog is duck-typed
+    to keep this module free of cog-side imports."""
 
     _HANDLER_NAME: str = ""
-    # When True the bound view is passed to the cog handler as ``view=`` so it
-    # can read live select state (the message components only carry defaults).
+    # Pass the view to the handler so it can read live select state; the
+    # message components only carry defaults.
     _PASS_VIEW: bool = False
 
     def __init__(
@@ -260,8 +222,7 @@ class MigrationDeferButton(_BoundButton):
 
 
 class MigrationOpenPrefsButton(_BoundButton):
-    """Legacy custom_id kept registered so any pre-existing card in the wild
-    can still be clicked without surfacing "This interaction failed"."""
+    """Legacy custom_id kept registered so pre-existing cards still respond."""
 
     _HANDLER_NAME = "handle_migration_open_prefs"
 
@@ -275,9 +236,7 @@ class MigrationOpenPrefsButton(_BoundButton):
 
 
 class _AckSelect(discord.ui.Select):
-    """Select that just acknowledges the click so Discord doesn't show a
-    "This interaction failed" toast when the user changes a preference. The
-    actual value read happens later, when the user clicks Save."""
+    """Select that only defers the interaction; the value is read on Save."""
 
     async def callback(self, interaction: discord.Interaction) -> None:
         log.debug(
@@ -326,12 +285,11 @@ class _IntroLayout(discord.ui.LayoutView):
 
 def intro_card(name: str | None = None, *, cog: Any | None = None) -> RenderedMessage:
     """Step 1: greet the Dom/me and ask for their Throne username or link."""
-
     return RenderedMessage(view=_IntroLayout(name=name, cog=cog))
 
 
 def build_intro_modal(*, cog: Any | None = None, guild_id: int | None = None) -> discord.ui.Modal:
-    """Throne input modal. ``on_submit`` delegates to ``cog.handle_modal_submit``."""
+    """Throne input modal; on_submit delegates to cog.handle_modal_submit."""
 
     class _ThroneInputModal(discord.ui.Modal, title="Your Throne profile"):
         throne_input: discord.ui.TextInput = discord.ui.TextInput(
@@ -405,7 +363,6 @@ def identity_confirm_card(
     cog: Any | None = None,
 ) -> RenderedMessage:
     """Step 3: confirm the Throne identity Rob resolved."""
-
     return RenderedMessage(
         view=_IdentityConfirmLayout(
             throne_handle=throne_handle,
@@ -462,13 +419,11 @@ def webhook_setup_card(
     *, webhook_url: str, cog: Any | None = None
 ) -> RenderedMessage:
     """Step 4: ask the user to plug Rob's webhook URL into Throne."""
-
     return RenderedMessage(view=_WebhookSetupLayout(webhook_url=webhook_url, cog=cog))
 
 
 def webhook_waiting_card(*, cog: Any | None = None) -> RenderedMessage:
     """Backwards-compat shim used by older tests."""
-
     return webhook_setup_card(webhook_url="(your webhook URL above)", cog=cog)
 
 
@@ -478,12 +433,8 @@ def webhook_waiting_card(*, cog: Any | None = None) -> RenderedMessage:
 
 
 class PreferencesView(discord.ui.LayoutView):
-    """Leaderboard access preference via Components V2.
-
-    Renders the "leaderboard access" select (when ``show_leaderboard_access``
-    is set) plus a Save button. On save the cog grants/removes the access role,
-    which opens the #leaderboard channel and the /leaderboard command.
-    """
+    """Leaderboard access select plus a Save button. Saving grants or removes
+    the access role, which controls #leaderboard and /leaderboard."""
 
     def __init__(
         self,
@@ -546,7 +497,7 @@ class PreferencesView(discord.ui.LayoutView):
         container.add_item(discord.ui.Separator())
 
         save = SavePrefsButton(cog)
-        # Allow ``save_custom_id`` overrides used by older callers (settings cog).
+        # Older callers (settings cog) pass their own save_custom_id.
         if save_custom_id != ID_PREFS_SAVE:
             save.custom_id = save_custom_id
         self.save_button = save

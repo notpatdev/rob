@@ -109,8 +109,8 @@ def test_voice_attachment_detection():
     non_voice = _FakeMessage(voice=False, attachments=[image])
     assert _voice_attachment(non_voice) is None
 
-    # A plain audio upload (not flagged, not named like a voice note) must NOT be
-    # treated as a voice message — Rob shouldn't transcribe arbitrary media.
+    # A plain audio upload (not flagged, not named like a voice note) must not
+    # be treated as a voice message; Rob shouldn't transcribe arbitrary media.
     music = _FakeMessage(
         voice=False, attachments=[_FakeAttachment(content_type="audio/mpeg", filename="song.mp3")]
     )
@@ -183,8 +183,7 @@ def test_over_duration_is_skipped():
 
 
 def test_unknown_duration_is_skipped():
-    # A voice-note-named attachment with no duration can't be length-capped, so
-    # Rob skips it rather than transcribing audio of unknown length.
+    # No duration means the length cap can't be applied, so skip it.
     service = _FakeService()
     cog = VoiceTranscriptionCog(_bot(service))
     message = _FakeMessage(attachments=[_FakeAttachment(duration=None)])
@@ -204,7 +203,6 @@ def test_over_size_is_skipped():
 
 
 def _ping_reply_message(target, *, resolved=True, mention=True):
-    """A non-voice message replying to `target` and (optionally) pinging Rob."""
     reference = SimpleNamespace(
         resolved=target if resolved else None,
         message_id=getattr(target, "id", None),
@@ -225,8 +223,7 @@ def test_ping_reply_transcribes_older_voice_message():
     cog = VoiceTranscriptionCog(_bot(service))
     old_voice = _FakeMessage()  # the (older) voice message being replied to
 
-    # discord.py resolves references to real Message objects; our fake isn't
-    # one, so patch the resolver the same way other cog tests patch helpers.
+    # Our fake isn't a real discord.Message, so patch the reference resolver.
     ping = _ping_reply_message(old_voice)
 
     async def _resolve(_message):
@@ -286,7 +283,6 @@ def test_ping_reply_to_bot_voice_message_is_ignored():
 
 def test_transcribe_none_result_no_reply():
     service = _FakeService(result=None)
-    # result=None means the service couldn't transcribe → no reply.
     service.result = None
     cog = VoiceTranscriptionCog(_bot(service))
     message = _FakeMessage()

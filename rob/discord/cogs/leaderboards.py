@@ -61,10 +61,8 @@ class LeaderboardsCog(commands.Cog):
         user_id = target_user.id
         settings = await self.bot.guild_settings_repo.get(guild_id)
 
-        # Test guild only: viewing the leaderboard requires the configured
-        # access role (the same role that grants #leaderboard channel access).
-        # Staff (admins / mod role) always bypass. Outside the test guild, or
-        # when no access role is configured, viewing stays open as before.
+        # Test guild only: viewing requires the leaderboard access role; staff
+        # bypass. Elsewhere, or with no role configured, viewing stays open.
         if is_new_system_guild(guild_id):
             view_role_id = (
                 getattr(settings, "leaderboard_view_role_id", None)

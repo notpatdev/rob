@@ -262,8 +262,6 @@ class _FakeBotSettings:
 
 
 class _FakeSubsRepo:
-    """Minimal fake SubsRepository for tests that need name-based sub lookup."""
-
     def __init__(self, send_names_by_user: dict[int, list[str]] | None = None) -> None:
         self._send_names_by_user = send_names_by_user or {}
 
@@ -542,7 +540,6 @@ def test_special_sub_recovery_requires_specific_domme():
     assert result is not None
     assert result.reason == "wrong_number_sub_recovery"
 
-    # Sending to a different domme does not recover.
     wrong_domme_recovered = asyncio.run(
         service.process_send_for_count_rescue(
             SimpleNamespace(
@@ -558,7 +555,6 @@ def test_special_sub_recovery_requires_specific_domme():
     )
     assert wrong_domme_recovered is False
 
-    # Sending to the required domme recovers the count.
     correct_domme_recovered = asyncio.run(
         service.process_send_for_count_rescue(
             SimpleNamespace(
@@ -659,9 +655,7 @@ def test_recovery_windows_are_restart_safe_and_expiry_resolution_is_idempotent()
 
 
 def test_sub_recovery_with_unregistered_send_name_matches_via_registered_name():
-    """Sub fails the count; their Throne send has sub_user_id=None (username not linked),
-    but the send name matches the failed sub's registered Throne username in the subs repo.
-    Recovery should succeed when the subs repo is wired up."""
+    """A send with sub_user_id=None recovers when its name matches the sub's registered Throne username."""
     channel = _FakeChannel(channel_id=100)
     domme = _FakeMember(20, [_Role(33, "Dom/me")], display_name="Miss Adore", name="missadore")
     sub = _FakeMember(10, [_Role(22, "Sub")], display_name="Subby", name="subby")
@@ -676,7 +670,6 @@ def test_sub_recovery_with_unregistered_send_name_matches_via_registered_name():
     assert result is not None
     assert result.reason == "wrong_number_sub_recovery"
 
-    # Send where sub_user_id is None but sub_name matches registered Throne username
     recovered = asyncio.run(
         service.process_send_for_count_rescue(
             SimpleNamespace(
@@ -695,8 +688,7 @@ def test_sub_recovery_with_unregistered_send_name_matches_via_registered_name():
 
 
 def test_sub_recovery_with_unregistered_send_name_fails_without_subs_repo():
-    """Without a subs repo configured, a send with sub_user_id=None cannot recover
-    a sub failure window, even if the name would match."""
+    """Without a subs repo, a name-only send cannot recover a sub failure window."""
     channel = _FakeChannel(channel_id=100)
     domme = _FakeMember(20, [_Role(33, "Dom/me")], display_name="Miss Adore", name="missadore")
     sub = _FakeMember(10, [_Role(22, "Sub")], display_name="Subby", name="subby")
@@ -725,7 +717,6 @@ def test_sub_recovery_with_unregistered_send_name_fails_without_subs_repo():
 
 
 def test_sub_recovery_send_name_match_is_case_insensitive():
-    """Name-based fallback matching should be case-insensitive."""
     channel = _FakeChannel(channel_id=100)
     domme = _FakeMember(20, [_Role(33, "Dom/me")], display_name="Miss Adore", name="missadore")
     sub = _FakeMember(10, [_Role(22, "Sub")], display_name="Subby", name="subby")

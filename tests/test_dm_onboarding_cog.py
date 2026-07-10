@@ -24,7 +24,7 @@ from rob.ui.cards.dm_onboarding import (
 
 # A guild that is neither main nor test: the new onboarding flow must stay off.
 OTHER_GUILD_ID = 424242424242424242
-_DEFAULT_LATEST_STATE = object()
+_NO_LATEST_STATE_OVERRIDE = object()
 
 
 # ---------------------------------------------------------------------------
@@ -33,10 +33,10 @@ _DEFAULT_LATEST_STATE = object()
 
 
 class _FakeOnboardingRepo:
-    def __init__(self, state=None, latest_state=_DEFAULT_LATEST_STATE):
+    def __init__(self, state=None, latest_state=_NO_LATEST_STATE_OVERRIDE):
         self.state = state
         self.latest_state = (
-            state if latest_state is _DEFAULT_LATEST_STATE else latest_state
+            state if latest_state is _NO_LATEST_STATE_OVERRIDE else latest_state
         )
         self.set_dm_message_calls: list[dict] = []
 

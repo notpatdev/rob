@@ -112,6 +112,10 @@ class DommeOnboardingRepository:
                 WHERE discord_user_id = $1
                 -- Prefer active onboarding rows; completed rows are only a
                 -- fallback if there is no in-progress state for the user.
+                -- last_interaction_at is the primary freshness signal,
+                -- updated_at breaks ties when the same interaction touched
+                -- multiple columns, and created_at gives deterministic order
+                -- for older rows that predate later updates.
                 ORDER BY
                     CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END,
                     last_interaction_at DESC,

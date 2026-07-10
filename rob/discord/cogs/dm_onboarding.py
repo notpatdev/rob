@@ -225,9 +225,11 @@ class DMOnboardingCog(commands.Cog):
 
     @staticmethod
     def _interaction_custom_id(interaction: discord.Interaction) -> str | None:
-        data = getattr(interaction, "data", None) or {}
+        data = getattr(interaction, "data", None)
         if isinstance(data, dict):
             return data.get("custom_id")
+        if data is None:
+            return None
         return getattr(data, "custom_id", None)
 
     async def _resolve_dm_onboarding_guild_id(

@@ -101,6 +101,33 @@ class DommeOnboardingRepository:
             )
         return _build(row) if row is not None else None
 
+    async def get_latest_for_user(
+        self, *, discord_user_id: int
+    ) -> DommeOnboardingState | None:
+        async with self.database.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                SELECT *
+                FROM domme_onboarding_state
+                WHERE discord_user_id = $1
+                -- Prefer active onboarding rows; completed rows are only a
+                -- fallback if there is no in-progress state for the user.
+                -- last_interaction_at is the primary freshness signal because
+                -- every stage transition updates it; updated_at then breaks
+                -- ties when the same interaction modified multiple columns in
+                -- one write, and created_at gives deterministic order for
+                -- older rows that predate later updates.
+                ORDER BY
+                    CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END,
+                    last_interaction_at DESC,
+                    updated_at DESC,
+                    created_at DESC
+                LIMIT 1
+                """,
+                discord_user_id,
+            )
+        return _build(row) if row is not None else None
+
     async def set_stage(
         self,
         *,

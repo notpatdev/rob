@@ -48,6 +48,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+_RERUN_REGISTER_DOMME_MESSAGE = (
+    "I lost your server context for this setup. Please run /register domme "
+    "again in the server to re-establish it."
+)
+
 
 class _PersistentInteractionsView(discord.ui.View):
     """Fallback view registered at startup. discord.py's ViewStore routes
@@ -198,8 +203,8 @@ class DMOnboardingCog(commands.Cog):
             )
 
     async def _resolve_guild_id_for_user(self, user_id: int) -> int | None:
-        """DM interactions carry no interaction.guild, so look up the
-        in-progress row by TEST_GUILD_ID (the flow is test-guild only)."""
+        """Fallback guild lookup for older DM flows that still depend on the
+        historic test-guild onboarding row."""
 
         repo = getattr(self.bot, "domme_onboarding_repo", None)
         if repo is None:
@@ -217,6 +222,79 @@ class DMOnboardingCog(commands.Cog):
         if state is None:
             return None
         return int(state.guild_id)
+
+    @staticmethod
+    def _extract_interaction_custom_id(
+        interaction: discord.Interaction,
+    ) -> str | None:
+        data = getattr(interaction, "data", None)
+        if isinstance(data, dict):
+            return data.get("custom_id")
+        if data is None:
+            return None
+        return getattr(data, "custom_id", None)
+
+    async def _resolve_dm_onboarding_guild_id(
+        self, interaction: discord.Interaction
+    ) -> int | None:
+        user_id = interaction.user.id
+        custom_id = self._extract_interaction_custom_id(interaction)
+        repo = getattr(self.bot, "domme_onboarding_repo", None)
+        state_found = False
+
+        if repo is not None:
+            try:
+                state = await repo.get_latest_for_user(discord_user_id=user_id)
+            except Exception as exc:
+                log.exception(
+                    "DM onboarding guild resolution state lookup failed "
+                    "user_id=%s custom_id=%s interaction_guild_id=%s "
+                    "exc_type=%s",
+                    user_id,
+                    custom_id,
+                    getattr(interaction, "guild_id", None),
+                    type(exc).__name__,
+                )
+            else:
+                state_found = state is not None
+                if state is not None and state.guild_id is not None:
+                    guild_id = int(state.guild_id)
+                    log.info(
+                        "DM onboarding guild resolved user_id=%s custom_id=%s "
+                        "state_found=%s fallback_resolved=%s guild_id=%s source=state",
+                        user_id,
+                        custom_id,
+                        state_found,
+                        False,
+                        guild_id,
+                    )
+                    return guild_id
+
+        fallback_guild_id = await self._resolve_guild_id_for_user(user_id)
+        fallback_resolved = fallback_guild_id is not None
+        if fallback_guild_id is not None:
+            log.info(
+                "DM onboarding guild resolved user_id=%s custom_id=%s "
+                "state_found=%s fallback_resolved=%s guild_id=%s source=fallback",
+                user_id,
+                custom_id,
+                state_found,
+                fallback_resolved,
+                fallback_guild_id,
+            )
+            return fallback_guild_id
+
+        log.warning(
+            "DM onboarding guild resolution failed user_id=%s custom_id=%s "
+            "state_found=%s fallback_resolved=%s guild_id=%s reason=%s",
+            user_id,
+            custom_id,
+            state_found,
+            fallback_resolved,
+            None,
+            "missing_onboarding_state_and_fallback",
+        )
+        return None
 
     async def _edit_stored_dm(
         self,
@@ -280,10 +358,21 @@ class DMOnboardingCog(commands.Cog):
             interaction.guild_id,
             getattr(interaction, "channel_id", None),
         )
-        guild_id = interaction.guild_id or await self._resolve_guild_id_for_user(
-            interaction.user.id
+        guild_id = interaction.guild_id or await self._resolve_dm_onboarding_guild_id(
+            interaction
         )
-        if guild_id is None or not is_new_system_guild(guild_id):
+        if guild_id is None:
+            log.warning(
+                "Onboarding open_modal rejected due to missing guild context "
+                "user_id=%s custom_id=%s",
+                interaction.user.id,
+                self._extract_interaction_custom_id(interaction),
+            )
+            await interaction.response.send_message(
+                _RERUN_REGISTER_DOMME_MESSAGE, ephemeral=True
+            )
+            return
+        if not is_new_system_guild(guild_id):
             log.warning(
                 "Onboarding open_modal rejected (no guild or wrong guild) "
                 "user_id=%s guild_id=%s",
@@ -391,9 +480,14 @@ class DMOnboardingCog(commands.Cog):
         log.info(
             "handle_identity_yes user_id=%s", interaction.user.id
         )
-        guild_id = await self._resolve_guild_id_for_user(interaction.user.id)
+        guild_id = await self._resolve_dm_onboarding_guild_id(interaction)
         service = self.service
-        if guild_id is None or service is None or not is_new_system_guild(guild_id):
+        if guild_id is None:
+            await interaction.response.send_message(
+                _RERUN_REGISTER_DOMME_MESSAGE, ephemeral=True
+            )
+            return
+        if service is None or not is_new_system_guild(guild_id):
             await interaction.response.send_message(
                 "This setup isn't available right now.", ephemeral=True
             )
@@ -446,9 +540,14 @@ class DMOnboardingCog(commands.Cog):
 
     async def handle_identity_no(self, interaction: discord.Interaction) -> None:
         log.info("handle_identity_no user_id=%s", interaction.user.id)
-        guild_id = await self._resolve_guild_id_for_user(interaction.user.id)
+        guild_id = await self._resolve_dm_onboarding_guild_id(interaction)
         service = self.service
-        if guild_id is None or service is None or not is_new_system_guild(guild_id):
+        if guild_id is None:
+            await interaction.response.send_message(
+                _RERUN_REGISTER_DOMME_MESSAGE, ephemeral=True
+            )
+            return
+        if service is None or not is_new_system_guild(guild_id):
             await interaction.response.send_message(
                 "This setup isn't available right now.", ephemeral=True
             )
@@ -483,8 +582,13 @@ class DMOnboardingCog(commands.Cog):
         then re-render the waiting card with the new URL."""
 
         log.info("handle_webhook_retry user_id=%s", interaction.user.id)
-        guild_id = await self._resolve_guild_id_for_user(interaction.user.id)
-        if guild_id is None or not is_new_system_guild(guild_id):
+        guild_id = await self._resolve_dm_onboarding_guild_id(interaction)
+        if guild_id is None:
+            await interaction.response.send_message(
+                _RERUN_REGISTER_DOMME_MESSAGE, ephemeral=True
+            )
+            return
+        if not is_new_system_guild(guild_id):
             await interaction.response.send_message(
                 "This setup isn't available right now.", ephemeral=True
             )
@@ -549,9 +653,14 @@ class DMOnboardingCog(commands.Cog):
         self, interaction: discord.Interaction, view: Any = None
     ) -> None:
         log.info("handle_save_preferences user_id=%s", interaction.user.id)
-        guild_id = await self._resolve_guild_id_for_user(interaction.user.id)
+        guild_id = await self._resolve_dm_onboarding_guild_id(interaction)
         service = self.service
-        if guild_id is None or service is None or not is_new_system_guild(guild_id):
+        if guild_id is None:
+            await interaction.response.send_message(
+                _RERUN_REGISTER_DOMME_MESSAGE, ephemeral=True
+            )
+            return
+        if service is None or not is_new_system_guild(guild_id):
             await interaction.response.send_message(
                 "This setup isn't available right now.", ephemeral=True
             )
@@ -593,11 +702,12 @@ class DMOnboardingCog(commands.Cog):
         self, interaction: discord.Interaction, view: Any = None
     ) -> None:
         log.info("handle_migration_save user_id=%s", interaction.user.id)
-        guild_id = await self._resolve_guild_id_for_user(interaction.user.id)
+        guild_id = await self._resolve_dm_onboarding_guild_id(interaction)
         if guild_id is None:
-            from rob.config.guilds import TEST_GUILD_ID
-
-            guild_id = TEST_GUILD_ID
+            await interaction.response.send_message(
+                _RERUN_REGISTER_DOMME_MESSAGE, ephemeral=True
+            )
+            return
         if not is_new_system_guild(guild_id):
             await interaction.response.send_message(
                 "This setup isn't available here.", ephemeral=True
@@ -653,11 +763,12 @@ class DMOnboardingCog(commands.Cog):
 
     async def handle_migration_defer(self, interaction: discord.Interaction) -> None:
         log.info("handle_migration_defer user_id=%s", interaction.user.id)
-        guild_id = await self._resolve_guild_id_for_user(interaction.user.id)
+        guild_id = await self._resolve_dm_onboarding_guild_id(interaction)
         if guild_id is None:
-            from rob.config.guilds import TEST_GUILD_ID
-
-            guild_id = TEST_GUILD_ID
+            await interaction.response.send_message(
+                _RERUN_REGISTER_DOMME_MESSAGE, ephemeral=True
+            )
+            return
         if not is_new_system_guild(guild_id):
             await interaction.response.send_message(
                 "This setup isn't available here.", ephemeral=True

@@ -24,6 +24,7 @@ from rob.ui.cards.dm_onboarding import (
 
 # A guild that is neither main nor test: the new onboarding flow must stay off.
 OTHER_GUILD_ID = 424242424242424242
+_LATEST_STATE_SENTINEL = object()
 
 
 # ---------------------------------------------------------------------------
@@ -32,12 +33,18 @@ OTHER_GUILD_ID = 424242424242424242
 
 
 class _FakeOnboardingRepo:
-    def __init__(self, state=None):
+    def __init__(self, state=None, latest_state=_LATEST_STATE_SENTINEL):
         self.state = state
+        self.latest_state = (
+            state if latest_state is _LATEST_STATE_SENTINEL else latest_state
+        )
         self.set_dm_message_calls: list[dict] = []
 
     async def get(self, *, guild_id, discord_user_id):
         return self.state
+
+    async def get_latest_for_user(self, *, discord_user_id):
+        return self.latest_state
 
     async def set_dm_message(self, **kwargs):
         self.set_dm_message_calls.append(kwargs)
@@ -440,6 +447,102 @@ def test_handle_save_preferences_persists_and_renders_success_card():
         discord_user_id=42,
     )
     assert dm_message.edits, "success card should be edited into stored DM"
+
+
+def test_handle_save_preferences_uses_persisted_state_first():
+    dm_message = _FakeMessage()
+    user = _FakeUser(user_id=42)
+    bot = _FakeBot(
+        onboarding_state=SimpleNamespace(
+            guild_id=MAIN_GUILD_ID,
+            stage="awaiting_preferences",
+            dm_channel_id=222,
+            dm_message_id=111,
+        ),
+        user=user,
+    )
+    user._last_message = dm_message
+    select_access = SimpleNamespace(
+        custom_id=ID_PREFS_LEADERBOARD_ACCESS, values=[LEADERBOARD_ACCESS_ON_VALUE]
+    )
+    fake_components = [
+        SimpleNamespace(children=[
+            SimpleNamespace(children=[select_access]),
+        ]),
+    ]
+    fake_message = SimpleNamespace(components=fake_components)
+    cog = DMOnboardingCog(bot)
+    cog._resolve_guild_id_for_user = AsyncMock(return_value=None)
+    interaction = _make_interaction(user_id=42, message=fake_message)
+
+    asyncio.run(cog.handle_save_preferences(interaction))
+
+    bot.dm_onboarding_service.save_preferences.assert_awaited_once_with(
+        guild_id=MAIN_GUILD_ID,
+        discord_user_id=42,
+    )
+    cog._resolve_guild_id_for_user.assert_not_awaited()
+    assert dm_message.edits, "success card should be edited into stored DM"
+
+
+def test_handle_save_preferences_falls_back_to_user_guild_resolution():
+    dm_message = _FakeMessage()
+    user = _FakeUser(user_id=42)
+    bot = _FakeBot(
+        onboarding_state=SimpleNamespace(
+            guild_id=TEST_GUILD_ID,
+            stage="awaiting_preferences",
+            dm_channel_id=222,
+            dm_message_id=111,
+        ),
+        user=user,
+    )
+    bot.domme_onboarding_repo = _FakeOnboardingRepo(
+        state=SimpleNamespace(
+            guild_id=TEST_GUILD_ID,
+            stage="awaiting_preferences",
+            dm_channel_id=222,
+            dm_message_id=111,
+        ),
+        latest_state=None,
+    )
+    user._last_message = dm_message
+    select_access = SimpleNamespace(
+        custom_id=ID_PREFS_LEADERBOARD_ACCESS, values=[LEADERBOARD_ACCESS_ON_VALUE]
+    )
+    fake_components = [
+        SimpleNamespace(children=[
+            SimpleNamespace(children=[select_access]),
+        ]),
+    ]
+    fake_message = SimpleNamespace(components=fake_components)
+    cog = DMOnboardingCog(bot)
+    cog._resolve_guild_id_for_user = AsyncMock(return_value=TEST_GUILD_ID)
+    interaction = _make_interaction(user_id=42, message=fake_message)
+
+    asyncio.run(cog.handle_save_preferences(interaction))
+
+    bot.dm_onboarding_service.save_preferences.assert_awaited_once_with(
+        guild_id=TEST_GUILD_ID,
+        discord_user_id=42,
+    )
+    cog._resolve_guild_id_for_user.assert_awaited_once_with(42)
+    assert dm_message.edits, "success card should be edited into stored DM"
+
+
+def test_handle_save_preferences_missing_guild_context_prompts_rerun():
+    bot = _FakeBot(onboarding_state=None)
+    cog = DMOnboardingCog(bot)
+    cog._resolve_guild_id_for_user = AsyncMock(return_value=None)
+    interaction = _make_interaction(user_id=42)
+
+    asyncio.run(cog.handle_save_preferences(interaction))
+
+    interaction.response.send_message.assert_awaited_once_with(
+        "I lost your server context for this setup. Please run /register domme again in the server to re-establish it.",
+        ephemeral=True,
+    )
+    bot.dm_onboarding_service.save_preferences.assert_not_awaited()
 
 
 def test_handle_save_preferences_grants_access_from_live_view(monkeypatch):

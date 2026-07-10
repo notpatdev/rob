@@ -24,7 +24,7 @@ from rob.ui.cards.dm_onboarding import (
 
 # A guild that is neither main nor test: the new onboarding flow must stay off.
 OTHER_GUILD_ID = 424242424242424242
-_NO_LATEST_STATE_OVERRIDE = object()
+_LATEST_STATE_SENTINEL = object()
 
 
 # ---------------------------------------------------------------------------
@@ -33,10 +33,10 @@ _NO_LATEST_STATE_OVERRIDE = object()
 
 
 class _FakeOnboardingRepo:
-    def __init__(self, state=None, latest_state=_NO_LATEST_STATE_OVERRIDE):
+    def __init__(self, state=None, latest_state=_LATEST_STATE_SENTINEL):
         self.state = state
         self.latest_state = (
-            state if latest_state is _NO_LATEST_STATE_OVERRIDE else latest_state
+            state if latest_state is _LATEST_STATE_SENTINEL else latest_state
         )
         self.set_dm_message_calls: list[dict] = []
 
@@ -449,7 +449,7 @@ def test_handle_save_preferences_persists_and_renders_success_card():
     assert dm_message.edits, "success card should be edited into stored DM"
 
 
-def test_handle_save_preferences_uses_persisted_state_guild_id_before_fallback():
+def test_handle_save_preferences_uses_persisted_state_first():
     dm_message = _FakeMessage()
     user = _FakeUser(user_id=42)
     bot = _FakeBot(

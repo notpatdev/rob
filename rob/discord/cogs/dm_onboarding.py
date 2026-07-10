@@ -224,7 +224,9 @@ class DMOnboardingCog(commands.Cog):
         return int(state.guild_id)
 
     @staticmethod
-    def _interaction_custom_id(interaction: discord.Interaction) -> str | None:
+    def _extract_interaction_custom_id(
+        interaction: discord.Interaction,
+    ) -> str | None:
         data = getattr(interaction, "data", None)
         if isinstance(data, dict):
             return data.get("custom_id")
@@ -236,7 +238,7 @@ class DMOnboardingCog(commands.Cog):
         self, interaction: discord.Interaction
     ) -> int | None:
         user_id = interaction.user.id
-        custom_id = self._interaction_custom_id(interaction)
+        custom_id = self._extract_interaction_custom_id(interaction)
         repo = getattr(self.bot, "domme_onboarding_repo", None)
         state_found = False
 
@@ -364,7 +366,7 @@ class DMOnboardingCog(commands.Cog):
                 "Onboarding open_modal rejected due to missing guild context "
                 "user_id=%s custom_id=%s",
                 interaction.user.id,
-                self._interaction_custom_id(interaction),
+                self._extract_interaction_custom_id(interaction),
             )
             await interaction.response.send_message(
                 _RERUN_REGISTER_DOMME_MESSAGE, ephemeral=True

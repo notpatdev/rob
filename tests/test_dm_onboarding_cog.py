@@ -24,6 +24,7 @@ from rob.ui.cards.dm_onboarding import (
 
 # A guild that is neither main nor test: the new onboarding flow must stay off.
 OTHER_GUILD_ID = 424242424242424242
+_LATEST_STATE_SENTINEL = object()
 
 
 # ---------------------------------------------------------------------------
@@ -32,9 +33,11 @@ OTHER_GUILD_ID = 424242424242424242
 
 
 class _FakeOnboardingRepo:
-    def __init__(self, state=None, latest_state=...):
+    def __init__(self, state=None, latest_state=_LATEST_STATE_SENTINEL):
         self.state = state
-        self.latest_state = state if latest_state is ... else latest_state
+        self.latest_state = (
+            state if latest_state is _LATEST_STATE_SENTINEL else latest_state
+        )
         self.set_dm_message_calls: list[dict] = []
 
     async def get(self, *, guild_id, discord_user_id):

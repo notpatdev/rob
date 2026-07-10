@@ -110,6 +110,8 @@ class DommeOnboardingRepository:
                 SELECT *
                 FROM domme_onboarding_state
                 WHERE discord_user_id = $1
+                -- Prefer active onboarding rows; completed rows are only a
+                -- fallback if there is no in-progress state for the user.
                 ORDER BY
                     CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END,
                     last_interaction_at DESC,

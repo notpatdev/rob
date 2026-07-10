@@ -241,13 +241,15 @@ class DMOnboardingCog(commands.Cog):
         if repo is not None:
             try:
                 state = await repo.get_latest_for_user(discord_user_id=user_id)
-            except Exception:
+            except Exception as exc:
                 log.exception(
                     "DM onboarding guild resolution state lookup failed "
-                    "user_id=%s custom_id=%s interaction_guild_id=%s",
+                    "user_id=%s custom_id=%s interaction_guild_id=%s "
+                    "exc_type=%s",
                     user_id,
                     custom_id,
                     getattr(interaction, "guild_id", None),
+                    type(exc).__name__,
                 )
             else:
                 state_found = state is not None

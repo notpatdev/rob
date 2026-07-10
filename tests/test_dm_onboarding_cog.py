@@ -24,7 +24,7 @@ from rob.ui.cards.dm_onboarding import (
 
 # A guild that is neither main nor test: the new onboarding flow must stay off.
 OTHER_GUILD_ID = 424242424242424242
-_LATEST_STATE_SENTINEL = object()
+_DEFAULT_LATEST_STATE = object()
 
 
 # ---------------------------------------------------------------------------
@@ -33,10 +33,10 @@ _LATEST_STATE_SENTINEL = object()
 
 
 class _FakeOnboardingRepo:
-    def __init__(self, state=None, latest_state=_LATEST_STATE_SENTINEL):
+    def __init__(self, state=None, latest_state=_DEFAULT_LATEST_STATE):
         self.state = state
         self.latest_state = (
-            state if latest_state is _LATEST_STATE_SENTINEL else latest_state
+            state if latest_state is _DEFAULT_LATEST_STATE else latest_state
         )
         self.set_dm_message_calls: list[dict] = []
 
@@ -497,7 +497,15 @@ def test_handle_save_preferences_falls_back_to_user_guild_resolution():
         ),
         user=user,
     )
-    bot.domme_onboarding_repo.latest_state = None
+    bot.domme_onboarding_repo = _FakeOnboardingRepo(
+        state=SimpleNamespace(
+            guild_id=TEST_GUILD_ID,
+            stage="awaiting_preferences",
+            dm_channel_id=222,
+            dm_message_id=111,
+        ),
+        latest_state=None,
+    )
     user._last_message = dm_message
     select_access = SimpleNamespace(
         custom_id=ID_PREFS_LEADERBOARD_ACCESS, values=[LEADERBOARD_ACCESS_ON_VALUE]

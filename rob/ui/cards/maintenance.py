@@ -29,6 +29,6 @@ def rob_offline_embed() -> RenderedMessage:
             ),
             color=COLOR_WARNING,
             variant="warning",
-            eyebrow="Maintenance",
+            eyebrow="...",
         )
     )

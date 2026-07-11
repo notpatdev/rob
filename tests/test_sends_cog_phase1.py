@@ -15,7 +15,7 @@ class _FakeGuild:
 
 
 def test_legacy_manual_send_methods_are_supported():
-    assert sends_cog._MANUAL_METHODS == ["cashapp", "venmo", "paypal", "onlyfans", "loyalfans", "youpay", "other"]
+    assert sends_cog._MANUAL_METHODS == ["cashapp", "venmo", "paypal", "onlyfans", "loyalfans", "youpay", "throne", "other"]
 
 
 def test_resolve_sub_attribution_blank_is_unclaimed():

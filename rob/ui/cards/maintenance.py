@@ -23,14 +23,9 @@ def maintenance_embed(reason: str | None) -> RenderedMessage:
 def rob_offline_embed() -> RenderedMessage:
     return render(
         make_card(
-            title="Rob's Offline",
+            title="Send Tracking Offline",
             body=(
-                "-# Apologies, Rob is currently only running the bare features while "
-                "the future of Robs features are decided and worked on.\n\n"
-                "-# At current, only the following systems are online in VIB:\n\n"
-                "-# - Count (No Recovery)\n"
-                "-# - Manual Send Addition (no notification)\n\n"
-                "-# Sends tracked automatically or manually will continue to update in the backend."
+                "-# Rob's future is being decided. He may be back soon"
             ),
             color=COLOR_WARNING,
             variant="warning",

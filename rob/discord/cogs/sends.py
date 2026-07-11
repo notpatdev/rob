@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from rob.discord.client import RobBot
 
 
-_MANUAL_METHODS = ["cashapp", "venmo", "paypal", "onlyfans", "loyalfans", "youpay", "other"]
+_MANUAL_METHODS = ["cashapp", "venmo", "paypal", "onlyfans", "loyalfans", "youpay", "throne", "other"]
 
 
 def _resolve_sub_attribution(

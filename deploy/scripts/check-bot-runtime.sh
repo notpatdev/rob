@@ -70,10 +70,10 @@ echo "[4/8] Loading environment"
 load_env_file ".env"
 
 echo "[5/8] Validating bot runtime settings"
-PYTHON_DOTENV_DISABLED=1 PYTHONPATH=. "${PYTHON_BIN}" scripts/check_bot_runtime.py
+PYTHON_DOTENV_DISABLED=1 PYTHONPATH=. "${PYTHON_BIN}" ops/checks/check_bot_runtime.py
 
 echo "[6/8] Running database check"
-PYTHON_DOTENV_DISABLED=1 ROB_CHECK_DB_PROFILE=bot PYTHONPATH=. "${PYTHON_BIN}" scripts/check_db.py
+PYTHON_DOTENV_DISABLED=1 ROB_CHECK_DB_PROFILE=bot PYTHONPATH=. "${PYTHON_BIN}" ops/checks/check_db.py
 
 echo "[7/8] Checking bot service and local ops health"
 systemctl is-active --quiet "${SERVICE_NAME}" || {

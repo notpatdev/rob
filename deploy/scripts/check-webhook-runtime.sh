@@ -80,10 +80,10 @@ echo "[4/10] Loading environment"
 load_env_file ".env"
 
 echo "[5/10] Validating webhook runtime settings"
-PYTHON_DOTENV_DISABLED=1 PYTHONPATH=. "${PYTHON_BIN}" scripts/check_webhook_runtime.py
+PYTHON_DOTENV_DISABLED=1 PYTHONPATH=. "${PYTHON_BIN}" ops/checks/check_webhook_runtime.py
 
 echo "[6/10] Running database check"
-PYTHON_DOTENV_DISABLED=1 ROB_CHECK_DB_PROFILE=webhook PYTHONPATH=. "${PYTHON_BIN}" scripts/check_db.py
+PYTHON_DOTENV_DISABLED=1 ROB_CHECK_DB_PROFILE=webhook PYTHONPATH=. "${PYTHON_BIN}" ops/checks/check_db.py
 
 echo "[7/10] Checking webhook service"
 systemctl is-active --quiet "${SERVICE_NAME}" || {

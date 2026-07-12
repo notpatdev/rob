@@ -6,7 +6,7 @@ This document maps the legacy ROB feature inventory (`ROB_FEATURE_REPORT.md`) to
 
 ### 1) Bot startup and lifecycle
 - **Legacy behaviour:** config/env load, DB init/migrations, cog registration, app command sync, webhook lifecycle hooks, global blacklist checks on slash/prefix.
-- **Legacy modules:** `legacy/single-process-bot/config.py`, bot bootstrap/runtime files.
+- **Legacy modules:** `archive/single-process-bot/config.py`, bot bootstrap/runtime files.
 - **Current v2 status:** Partial.
 - **Classification:** Partial.
 - **Port?** Yes.
@@ -19,7 +19,7 @@ This document maps the legacy ROB feature inventory (`ROB_FEATURE_REPORT.md`) to
 
 ### 2) Throne webhook ingestion
 - **Legacy behaviour:** signed webhook verification, secret validation, dedupe, extraction, send posting + leaderboard sync.
-- **Legacy modules:** `legacy/single-process-bot/webhook_server.py`, `throne_tracker.py`.
+- **Legacy modules:** `archive/single-process-bot/webhook_server.py`, `throne_tracker.py`.
 - **Current v2 status:** Partial (core exists).
 - **Classification:** Partial.
 - **Port?** Yes.

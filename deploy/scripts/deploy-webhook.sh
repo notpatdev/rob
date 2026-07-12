@@ -103,7 +103,7 @@ PYTHONPATH=. "$PYTHON_BIN" -m compileall apps rob scripts
 
 echo "[8/13] Install global rob command if enabled"
 if [[ "$INSTALL_ROB_GLOBAL" == "true" ]]; then
-  ./scripts/install-rob-global.sh
+  ./ops/install-rob-global.sh
 else
   echo "Skipping global rob command installation."
 fi
@@ -118,22 +118,22 @@ if [[ -z "${THRONE_WEBHOOK_BASE_URL:-}" ]]; then
 fi
 
 echo "[10/13] Run database checks"
-if ! PYTHON_DOTENV_DISABLED=1 ROB_CHECK_DB_PROFILE=webhook PYTHONPATH=. "$PYTHON_BIN" scripts/check_db.py; then
+if ! PYTHON_DOTENV_DISABLED=1 ROB_CHECK_DB_PROFILE=webhook PYTHONPATH=. "$PYTHON_BIN" ops/checks/check_db.py; then
   echo "Database check failed."
   echo "This database has not been built for Rob v2 yet, or runtime grants are incomplete."
   echo
   echo "Manual fix:"
   echo "1. Open pgAdmin4 / psql as doadmin."
   echo "2. Select the target database."
-  echo "3. Run scripts/db/build/001_core_schema.sql."
-  echo "4. Run scripts/db/build/002_indexes.sql."
-  echo "5. Run scripts/db/build/004_sub_send_names.sql."
-  echo "6. Run scripts/db/build/005_count_recovery.sql."
-  echo "7. Run scripts/db/build/006_send_change_requests.sql."
-  echo "8. Run scripts/db/build/007_send_update_requests.sql."
-  echo "9. Run scripts/db/build/008_dm_preferences.sql."
-  echo "10. Run scripts/db/build/009_terms_acceptance.sql."
-  echo "11. Run the correct grants file from scripts/db/grants/."
+  echo "3. Run db/build/001_core_schema.sql."
+  echo "4. Run db/build/002_indexes.sql."
+  echo "5. Run db/build/004_sub_send_names.sql."
+  echo "6. Run db/build/005_count_recovery.sql."
+  echo "7. Run db/build/006_send_change_requests.sql."
+  echo "8. Run db/build/007_send_update_requests.sql."
+  echo "9. Run db/build/008_dm_preferences.sql."
+  echo "10. Run db/build/009_terms_acceptance.sql."
+  echo "11. Run the correct grants file from db/grants/."
   echo "12. Rerun deploy."
   exit 1
 fi

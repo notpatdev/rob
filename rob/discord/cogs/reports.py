@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from rob.config.guilds import OWNER_USER_ID
+from rob.config.guilds import BOT_OWNER_USER_IDS
 from rob.ui.cards.errors import error_card
 from rob.ui.cards.report import report_staff_card, report_submitted_card
 
@@ -70,43 +70,38 @@ class ReportsCog(commands.Cog):
     async def report(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(_ReportModal(cog=self))
 
-    async def _resolve_destination(
+    async def _resolve_destinations(
         self,
-        interaction: discord.Interaction,
-    ) -> discord.abc.Messageable | None:
-        # DM the bot operator, not the Discord application owner: that can be
-        # a team account or have DMs closed (403).
-        user = self.bot.get_user(OWNER_USER_ID)
-        if user is not None:
-            return user
-        try:
-            return await self.bot.fetch_user(OWNER_USER_ID)
-        except discord.HTTPException:
-            return None
+        _interaction: discord.Interaction,
+    ) -> list[discord.abc.Messageable]:
+        destinations: list[discord.abc.Messageable] = []
+        seen_user_ids: set[int] = set()
+        # DM the configured bot owners, not the Discord application owner: that
+        # can be a team account or have DMs closed (403).
+        for owner_user_id in BOT_OWNER_USER_IDS:
+            user = self.bot.get_user(owner_user_id)
+            if user is None:
+                try:
+                    user = await self.bot.fetch_user(owner_user_id)
+                except discord.HTTPException:
+                    continue
+            if user.id in seen_user_ids:
+                continue
+            seen_user_ids.add(user.id)
+            destinations.append(user)
+        return destinations
 
     async def _materialize_attachment(
         self,
         attachment: discord.Attachment | None,
-    ) -> discord.File | None:
+    ) -> tuple[bytes, str, str | None] | None:
         if attachment is None:
             return None
 
-        try:
-            return await attachment.to_file(use_cached=True)
-        except TypeError:
-            # Test doubles may not accept the keyword-only signature.
-            try:
-                return await attachment.to_file()
-            except (AttributeError, TypeError):
-                pass
-            except discord.HTTPException:
-                pass
-        except discord.HTTPException:
-            pass
-
         filename = getattr(attachment, "filename", "report-upload")
         description = getattr(attachment, "description", None)
-        for use_cached in (False, True):
+
+        for use_cached in (True, False):
             try:
                 data = await attachment.read(use_cached=use_cached)
             except TypeError:
@@ -116,9 +111,32 @@ class ReportsCog(commands.Cog):
                     continue
             except (AttributeError, discord.HTTPException):
                 continue
-            return discord.File(io.BytesIO(data), filename=filename, description=description)
+            return bytes(data), filename, description
 
-        return None
+        try:
+            file_obj = await attachment.to_file(use_cached=True)
+        except TypeError:
+            try:
+                file_obj = await attachment.to_file()
+            except (AttributeError, TypeError, discord.HTTPException):
+                return None
+        except (AttributeError, discord.HTTPException):
+            return None
+
+        fp = getattr(file_obj, "fp", None)
+        if fp is None:
+            return None
+        try:
+            if hasattr(fp, "seek"):
+                fp.seek(0)
+            data = fp.read()
+        except (AttributeError, OSError, ValueError):
+            return None
+        if isinstance(data, str):
+            data = data.encode()
+        return bytes(data), getattr(file_obj, "filename", filename), getattr(
+            file_obj, "description", description
+        )
 
     async def submit_report(
         self,
@@ -142,8 +160,8 @@ class ReportsCog(commands.Cog):
             )
             return
 
-        destination = await self._resolve_destination(interaction)
-        if destination is None:
+        destinations = await self._resolve_destinations(interaction)
+        if not destinations:
             await interaction.response.send_message(
                 **error_card(
                     "Rob could not find a report destination right now.",
@@ -166,18 +184,25 @@ class ReportsCog(commands.Cog):
             submitted_unix=int(submitted_at.timestamp()),
         )
 
-        file_obj = await self._materialize_attachment(attachment)
+        file_payload = await self._materialize_attachment(attachment)
 
         try:
-            await destination.send(**report_card.send_kwargs())
-            # Components V2 views suppress attachment previews, so the file is
-            # sent as its own follow-up message.
-            if file_obj is not None:
-                await destination.send(file=file_obj)
-            elif attachment is not None:
-                await destination.send(
-                    f"Attached file (couldn't be re-uploaded): {attachment.url}"
-                )
+            for destination in destinations:
+                await destination.send(**report_card.send_kwargs())
+                # Components V2 views suppress attachment previews, so the file
+                # is sent as its own follow-up message.
+                if file_payload is not None:
+                    data, filename, description = file_payload
+                    file_obj = discord.File(
+                        io.BytesIO(data),
+                        filename=filename,
+                        description=description,
+                    )
+                    await destination.send(file=file_obj)
+                elif attachment is not None:
+                    await destination.send(
+                        f"Attached file (couldn't be re-uploaded): {attachment.url}"
+                    )
         except discord.HTTPException:
             log.warning("Failed to deliver /report submission.", exc_info=True)
             await interaction.response.send_message(

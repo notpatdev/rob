@@ -22,7 +22,7 @@ jobs:
           python -m pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Compile Python sources
-        run: PYTHONPATH=. python -m compileall apps rob scripts
+        run: PYTHONPATH=. python -m compileall apps rob ops
 
       - name: Ruff
         run: ruff check .

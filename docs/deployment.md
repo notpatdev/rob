@@ -35,15 +35,15 @@ Deployment pre-check and deploy scripts validate DB readiness via `scripts/check
 
 If schema build/grants are required, run manually (admin action):
 
-- `scripts/db/build/001_core_schema.sql`
-- `scripts/db/build/002_indexes.sql`
-- `scripts/db/build/004_sub_send_names.sql`
-- `scripts/db/build/005_count_recovery.sql`
-- `scripts/db/build/006_send_change_requests.sql`
-- `scripts/db/build/007_send_update_requests.sql`
-- `scripts/db/build/008_dm_preferences.sql`
-- `scripts/db/build/009_terms_acceptance.sql`
-- `scripts/db/grants/*.sql`
+- `db/build/001_core_schema.sql`
+- `db/build/002_indexes.sql`
+- `db/build/004_sub_send_names.sql`
+- `db/build/005_count_recovery.sql`
+- `db/build/006_send_change_requests.sql`
+- `db/build/007_send_update_requests.sql`
+- `db/build/008_dm_preferences.sql`
+- `db/build/009_terms_acceptance.sql`
+- `db/grants/*.sql`
 
 SQLite data migration remains separate and is not part of deployment.
 
@@ -70,8 +70,8 @@ For production, use:
 
 Current production examples live in:
 
-- `deploy/examples/bot.prod.env.example`
-- `deploy/examples/webhook.prod.env.example`
+- `deploy/env/bot.prod.env.example`
+- `deploy/env/webhook.prod.env.example`
 
 The webhook host should stay on `127.0.0.1:8080` behind Cloudflared, and it should notify the bot over the private ops bridge (`ROB_BOT_NOTIFY_URL`) instead of polling the database for send cards.
 
@@ -81,7 +81,7 @@ If either service points at an older database, `scripts/check_db.py` will fail b
 
 Production DB setup remains manual. Use:
 
-- `scripts/db/manual/setup_rob_prod.sql`
+- `db/manual/setup_rob_prod.sql`
 
 That script:
 
@@ -96,7 +96,7 @@ Run it manually as `doadmin`, for example:
 psql postgresql://doadmin@<host>:25060/defaultdb \
   -v prod_rob_bot_password='replace-me' \
   -v prod_rob_webhook_password='replace-me-too' \
-  -f scripts/db/manual/setup_rob_prod.sql
+  -f db/manual/setup_rob_prod.sql
 ```
 
 ## Infrastructure hostnames

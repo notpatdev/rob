@@ -5,7 +5,7 @@ This rebuild keeps the Discord bot service and webhook service, but resets DB as
 ## Included
 
 - PostgreSQL-first runtime (`rob_dev_v2` rehearsal, `rob_prod` target)
-- manual DB build scripts under `scripts/db/build/`
+- manual DB build scripts under `db/build/`
 - runtime DB check gate via `scripts/check_db.py`
 - SQLite -> PostgreSQL import tooling under `scripts/data_migration/`
 - webhook compatibility route plus preferred `/webhook/{creator_id}/{secret}`
@@ -34,14 +34,14 @@ If DB check fails, deploy stops and asks for manual DB build SQL application.
 
 1. Connect to `rob_dev_v2` as `doadmin`.
 2. Run:
-   - `scripts/db/build/001_core_schema.sql`
-   - `scripts/db/build/002_indexes.sql`
-   - `scripts/db/build/003_achievements.sql`
-   - `scripts/db/build/004_sub_send_names.sql`
-   - `scripts/db/build/005_count_recovery.sql`
-   - `scripts/db/build/006_send_change_requests.sql`
+   - `db/build/001_core_schema.sql`
+   - `db/build/002_indexes.sql`
+   - `db/build/003_achievements.sql`
+   - `db/build/004_sub_send_names.sql`
+   - `db/build/005_count_recovery.sql`
+   - `db/build/006_send_change_requests.sql`
 3. Apply dev runtime grants:
-   - `scripts/db/grants/dev_rehearsal_prod_roles.sql`
+   - `db/grants/dev_rehearsal_prod_roles.sql`
 4. Set runtime `DATABASE_URL` to `prod_rob_bot -> rob_dev_v2` for bot and `prod_rob_webhook -> rob_dev_v2` for webhook.
 5. Run `PYTHONPATH=. python3 -m scripts.check_db`.
 6. Run importer inspect-only.

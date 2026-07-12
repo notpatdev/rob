@@ -4,4 +4,4 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-exec "${APP_ROOT}/scripts/robctl" "$@"
+exec "${APP_ROOT}/ops/cli/robctl" "$@"

@@ -35,7 +35,7 @@ This patch intentionally preserves split webhook/bot services and PostgreSQL-onl
 
 - Sources checked:
   - `notpatdev/rob-the-bot` (not accessible from this workspace)
-  - `legacy/single-process-bot/` (fallback used)
+  - `archive/single-process-bot/` (fallback used)
 - Copy restored:
   - registration
   - Throne setup

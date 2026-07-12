@@ -86,36 +86,23 @@ class ReportsCog(commands.Cog):
                     user = await self.bot.fetch_user(owner_user_id)
                 except discord.HTTPException:
                     continue
-            resolved_user_id = getattr(user, "id", owner_user_id)
-            if resolved_user_id in seen_user_ids:
+            if user.id in seen_user_ids:
                 continue
-            seen_user_ids.add(resolved_user_id)
+            seen_user_ids.add(user.id)
             destinations.append(user)
         return destinations
 
     async def _materialize_attachment(
         self,
         attachment: discord.Attachment | None,
-    ) -> discord.File | None:
+    ) -> tuple[bytes, str, str | None] | None:
         if attachment is None:
             return None
 
-        try:
-            return await attachment.to_file(use_cached=True)
-        except TypeError:
-            # Test doubles may not accept the keyword-only signature.
-            try:
-                return await attachment.to_file()
-            except (AttributeError, TypeError):
-                pass
-            except discord.HTTPException:
-                pass
-        except discord.HTTPException:
-            pass
-
         filename = getattr(attachment, "filename", "report-upload")
         description = getattr(attachment, "description", None)
-        for use_cached in (False, True):
+
+        for use_cached in (True, False):
             try:
                 data = await attachment.read(use_cached=use_cached)
             except TypeError:
@@ -125,7 +112,7 @@ class ReportsCog(commands.Cog):
                     continue
             except (AttributeError, discord.HTTPException):
                 continue
-            return discord.File(io.BytesIO(data), filename=filename, description=description)
+            return bytes(data), filename, description
 
         return None
 
@@ -175,13 +162,20 @@ class ReportsCog(commands.Cog):
             submitted_unix=int(submitted_at.timestamp()),
         )
 
+        file_payload = await self._materialize_attachment(attachment)
+
         try:
             for destination in destinations:
                 await destination.send(**report_card.send_kwargs())
                 # Components V2 views suppress attachment previews, so the file
                 # is sent as its own follow-up message.
-                file_obj = await self._materialize_attachment(attachment)
-                if file_obj is not None:
+                if file_payload is not None:
+                    data, filename, description = file_payload
+                    file_obj = discord.File(
+                        io.BytesIO(data),
+                        filename=filename,
+                        description=description,
+                    )
                     await destination.send(file=file_obj)
                 elif attachment is not None:
                     await destination.send(

@@ -14,7 +14,13 @@ resolve_script_path() {
 
 SCRIPT_PATH="$(resolve_script_path)"
 SCRIPT_DIR="$(cd -P "$(dirname "${SCRIPT_PATH}")" && pwd)"
-APP_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Walk up from this CLI's location (ops/cli/) to the app root — the dir that
+# holds pyproject.toml + .env + deploy/. Resolved by marker rather than a fixed
+# depth so relocating the CLI can't silently break .env loading again.
+APP_ROOT="${SCRIPT_DIR}"
+while [[ "${APP_ROOT}" != "/" && ! -f "${APP_ROOT}/pyproject.toml" ]]; do
+  APP_ROOT="$(dirname "${APP_ROOT}")"
+done
 
 ROB_BOT_SERVICE="${ROB_BOT_SERVICE:-rob-bot.service}"
 ROB_WEBHOOK_SERVICE="${ROB_WEBHOOK_SERVICE:-rob-webhook.service}"

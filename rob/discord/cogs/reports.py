@@ -72,9 +72,8 @@ class ReportsCog(commands.Cog):
 
     async def _resolve_destinations(
         self,
-        interaction: discord.Interaction,
+        _interaction: discord.Interaction,
     ) -> list[discord.abc.Messageable]:
-        del interaction
         destinations: list[discord.abc.Messageable] = []
         seen_user_ids: set[int] = set()
         # DM the configured bot owners, not the Discord application owner: that

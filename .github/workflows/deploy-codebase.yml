@@ -88,7 +88,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt
-      - run: PYTHONPATH=. python -m compileall apps rob scripts
+      - run: PYTHONPATH=. python -m compileall apps rob ops
       - run: ruff check .
       - run: PYTHONPATH=. python -m pytest -q
       - run: |
@@ -96,7 +96,7 @@ jobs:
           test -f deploy/scripts/deploy-webhook.sh
           test -f deploy/scripts/precheck-bot.sh
           test -f deploy/scripts/precheck-webhook.sh
-          test -f scripts/check_db.py
+          test -f ops/checks/check_db.py
 
   bot_server_precheck:
     if: ${{ needs.resolve_deploy_context.outputs.deploy_bot == 'true' }}
@@ -133,7 +133,7 @@ jobs:
               echo "ERROR: Could not fetch deploy ref ${deploy_ref} to refresh precheck scripts."
               exit 1
             fi
-            if ! run_git checkout FETCH_HEAD -- deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh scripts/check_db.py rob/config/settings.py scripts/db/build; then
+            if ! run_git checkout FETCH_HEAD -- deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh ops/checks/check_db.py rob/config/settings.py db/build; then
               echo "ERROR: Could not load precheck scripts from deploy ref ${deploy_ref}."
               exit 1
             fi
@@ -188,7 +188,7 @@ jobs:
               echo "ERROR: Could not fetch deploy ref ${deploy_ref} to refresh precheck scripts."
               exit 1
             fi
-            if ! run_git checkout FETCH_HEAD -- deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh scripts/check_db.py rob/config/settings.py scripts/db/build; then
+            if ! run_git checkout FETCH_HEAD -- deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh ops/checks/check_db.py rob/config/settings.py db/build; then
               echo "ERROR: Could not load precheck scripts from deploy ref ${deploy_ref}."
               exit 1
             fi
@@ -247,7 +247,7 @@ jobs:
               echo "ERROR: Could not fetch deploy ref ${deploy_ref} to refresh deploy scripts."
               exit 1
             fi
-            if ! run_git checkout FETCH_HEAD -- deploy/scripts/deploy-bot.sh deploy/scripts/deploy-webhook.sh deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh scripts/check_db.py rob/config/settings.py scripts/db/build; then
+            if ! run_git checkout FETCH_HEAD -- deploy/scripts/deploy-bot.sh deploy/scripts/deploy-webhook.sh deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh ops/checks/check_db.py rob/config/settings.py db/build; then
               echo "ERROR: Could not load deploy scripts from deploy ref ${deploy_ref}."
               exit 1
             fi
@@ -289,7 +289,7 @@ jobs:
               echo "ERROR: Could not fetch deploy ref ${deploy_ref} to refresh deploy scripts."
               exit 1
             fi
-            if ! run_git checkout FETCH_HEAD -- deploy/scripts/deploy-bot.sh deploy/scripts/deploy-webhook.sh deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh scripts/check_db.py rob/config/settings.py scripts/db/build; then
+            if ! run_git checkout FETCH_HEAD -- deploy/scripts/deploy-bot.sh deploy/scripts/deploy-webhook.sh deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh ops/checks/check_db.py rob/config/settings.py db/build; then
               echo "ERROR: Could not load deploy scripts from deploy ref ${deploy_ref}."
               exit 1
             fi

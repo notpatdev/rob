@@ -45,15 +45,15 @@ data/
 *.log
 logs/
 
-# Build/package junk
-build/
-dist/
+# Build/package junk (anchored to repo root so it does not shadow db/build/)
+/build/
+/dist/
 *.egg-info/
 
 # Keep Rob DB build SQL scripts tracked.
-!scripts/db/build/
-!scripts/db/build/*.sql
-!scripts/db/build/README.md
+!db/build/
+!db/build/*.sql
+!db/build/README.md
 
 # OS/editor files
 .DS_Store

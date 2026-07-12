@@ -215,7 +215,7 @@ run_db_checks() {
     if [[ -x "${dir}/.venv/bin/python" && -f "${dir}/.env" ]]; then
       log "Running DB check (${profile}) in ${dir}"
       ( cd "${dir}" && set -a && . ./.env && set +a \
-        && ROB_CHECK_DB_PROFILE="${profile}" PYTHONPATH=. .venv/bin/python -m scripts.check_db ) \
+        && ROB_CHECK_DB_PROFILE="${profile}" PYTHONPATH=. .venv/bin/python -m ops.checks.check_db ) \
         || warn "DB check (${profile}) failed — review the output above."
     else
       log "Skipping DB check (${profile}); no venv/.env in ${dir}."

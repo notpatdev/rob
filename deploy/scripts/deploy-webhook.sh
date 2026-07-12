@@ -99,7 +99,7 @@ echo "[6/13] Install dependencies"
 "$PYTHON_BIN" -m pip install -r requirements.txt
 
 echo "[7/13] Run compile checks"
-PYTHONPATH=. "$PYTHON_BIN" -m compileall apps rob scripts
+PYTHONPATH=. "$PYTHON_BIN" -m compileall apps rob ops
 
 echo "[8/13] Install global rob command if enabled"
 if [[ "$INSTALL_ROB_GLOBAL" == "true" ]]; then

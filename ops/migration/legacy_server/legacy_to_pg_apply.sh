@@ -106,13 +106,13 @@ fi
 
 if [[ -z "${SQLITE_PATH}" ]]; then
   SQLITE_PATH="$(
-    PYTHONPATH=. python3 -m scripts.data_migration.legacy_server.legacy_sqlite_report \
+    PYTHONPATH=. python3 -m ops.migration.legacy_server.legacy_sqlite_report \
       "${ROOT_ARGS[@]}" \
       --report-json "${INSPECT_JSON}" \
       | awk -F': ' '/selected_sqlite:/ {print $2; exit}'
   )"
 else
-  PYTHONPATH=. python3 -m scripts.data_migration.legacy_server.legacy_sqlite_report \
+  PYTHONPATH=. python3 -m ops.migration.legacy_server.legacy_sqlite_report \
     --sqlite "${SQLITE_PATH}" \
     "${ROOT_ARGS[@]}" \
     --report-json "${INSPECT_JSON}"
@@ -123,7 +123,7 @@ fi
   exit 1
 }
 
-PYTHONPATH=. python3 -m scripts.data_migration.import_sqlite_to_postgres \
+PYTHONPATH=. python3 -m ops.migration.import_sqlite_to_postgres \
   --sqlite "${SQLITE_PATH}" \
   --database-url "${DATABASE_URL}" \
   "${DEFAULT_GUILD_ARGS[@]}" \

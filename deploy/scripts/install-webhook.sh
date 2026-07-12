@@ -133,7 +133,7 @@ install_python_environment() {
   run_as_deploy "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
 
   log "Running compile checks"
-  run_as_deploy bash -lc "cd '${APP_DIR}' && PYTHONPATH=. .venv/bin/python -m compileall apps rob scripts"
+  run_as_deploy bash -lc "cd '${APP_DIR}' && PYTHONPATH=. .venv/bin/python -m compileall apps rob ops"
 }
 
 write_env_template_if_missing() {
@@ -238,7 +238,7 @@ maybe_enable_and_start() {
   fi
 
   log "Running database check"
-  run_as_deploy bash -lc "cd '${APP_DIR}' && set -a && source .env && set +a && PYTHONPATH=. .venv/bin/python -m scripts.check_db"
+  run_as_deploy bash -lc "cd '${APP_DIR}' && set -a && source .env && set +a && PYTHONPATH=. .venv/bin/python -m ops.checks.check_db"
 
   log "Starting ${SERVICE_NAME}"
   systemctl restart "${SERVICE_NAME}"

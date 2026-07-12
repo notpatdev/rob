@@ -17,7 +17,7 @@ Recommended baseline:
 ## Install Global `rob`
 
 ```bash
-scripts/install-rob-global.sh
+ops/install-rob-global.sh
 ```
 
 After this, `rob` is available globally from shell sessions. `robctl` still works as a compatibility alias.

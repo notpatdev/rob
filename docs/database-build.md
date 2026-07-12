@@ -13,19 +13,19 @@ Only SQLite -> PostgreSQL transfer should be called a migration.
 
 Execute as `doadmin` in pgAdmin4 or `psql`:
 
-1. `scripts/db/build/001_core_schema.sql`
-2. `scripts/db/build/002_indexes.sql`
-3. `scripts/db/build/003_achievements.sql`
-4. `scripts/db/build/004_sub_send_names.sql`
-5. `scripts/db/build/005_count_recovery.sql`
-6. `scripts/db/build/006_send_change_requests.sql`
-7. `scripts/db/build/003_runtime_grants_template.sql` (optional reference template)
+1. `db/build/001_core_schema.sql`
+2. `db/build/002_indexes.sql`
+3. `db/build/003_achievements.sql`
+4. `db/build/004_sub_send_names.sql`
+5. `db/build/005_count_recovery.sql`
+6. `db/build/006_send_change_requests.sql`
+7. `db/build/003_runtime_grants_template.sql` (optional reference template)
 
 Then apply runtime grants:
 
-- Dev rehearsal using production-shaped roles: `scripts/db/grants/dev_rehearsal_prod_roles.sql`
-- Prod bot: `scripts/db/grants/prod_rob_bot.sql`
-- Prod webhook: `scripts/db/grants/prod_rob_webhook.sql`
+- Dev rehearsal using production-shaped roles: `db/grants/dev_rehearsal_prod_roles.sql`
+- Prod bot: `db/grants/prod_rob_bot.sql`
+- Prod webhook: `db/grants/prod_rob_webhook.sql`
 
 Required `db_build_version` rows are:
 
@@ -36,19 +36,19 @@ Required `db_build_version` rows are:
 - `005_count_recovery`
 - `006_send_change_requests`
 
-Runtime grants are environment-specific and are validated by `scripts/check_db.py` from runtime credentials.
+Runtime grants are environment-specific and are validated by `ops/checks/check_db.py` from runtime credentials.
 
 ## Canonical rehearsal order (`rob_dev_v2`)
 
 1. Ensure `prod_rob_bot` and `prod_rob_webhook` roles exist.
-2. Run `scripts/db/build/001_core_schema.sql`.
-3. Run `scripts/db/build/002_indexes.sql`.
-4. Run `scripts/db/build/003_achievements.sql`.
-5. Run `scripts/db/build/004_sub_send_names.sql`.
-6. Run `scripts/db/build/005_count_recovery.sql`.
-7. Run `scripts/db/build/006_send_change_requests.sql`.
-8. Run `scripts/db/grants/dev_rehearsal_prod_roles.sql`.
-9. Run `PYTHONPATH=. python3 -m scripts.check_db` from both bot and webhook runtime environments.
+2. Run `db/build/001_core_schema.sql`.
+3. Run `db/build/002_indexes.sql`.
+4. Run `db/build/003_achievements.sql`.
+5. Run `db/build/004_sub_send_names.sql`.
+6. Run `db/build/005_count_recovery.sql`.
+7. Run `db/build/006_send_change_requests.sql`.
+8. Run `db/grants/dev_rehearsal_prod_roles.sql`.
+9. Run `PYTHONPATH=. python3 -m ops.checks.check_db` from both bot and webhook runtime environments.
 
 ## Target tables
 
@@ -78,4 +78,4 @@ Runtime users (`prod_rob_bot`, `prod_rob_webhook`) must not receive:
 - `DROP`
 - `TRUNCATE`
 
-Use `scripts/check_db.py` from runtime credentials to validate permissions and table/column shape.
+Use `ops/checks/check_db.py` from runtime credentials to validate permissions and table/column shape.

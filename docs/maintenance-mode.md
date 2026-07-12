@@ -28,11 +28,11 @@ When maintenance mode is disabled, the bot queue worker:
 ## Commands
 
 ```bash
-scripts/rob maintenance status
-scripts/rob maintenance on "reason"
-scripts/rob maintenance off
-scripts/rob queue status
-scripts/rob queue flush
+ops/cli/rob maintenance status
+ops/cli/rob maintenance on "reason"
+ops/cli/rob maintenance off
+ops/cli/rob queue status
+ops/cli/rob queue flush
 ```
 
 ## Rob Offline Mode
@@ -53,7 +53,7 @@ When enabled for the main guild:
 The dev/test guild is intentionally unaffected by this mode.
 
 ```bash
-scripts/rob offline status
-scripts/rob offline on
-scripts/rob offline off
+ops/cli/rob offline status
+ops/cli/rob offline on
+ops/cli/rob offline off
 ```

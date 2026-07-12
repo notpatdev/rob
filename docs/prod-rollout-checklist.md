@@ -50,7 +50,7 @@ Rehearsal note:
 Run:
 
 ```bash
-PYTHONPATH=. python3 -m scripts.check_db
+PYTHONPATH=. python3 -m ops.checks.check_db
 ```
 
 If this fails, apply missing DB build SQL manually and rerun.
@@ -61,7 +61,7 @@ Deploy scripts intentionally run:
 
 1. dependency install
 2. compile checks
-3. `scripts.check_db`
+3. `ops.checks.check_db`
 4. service restart
 
 Deploy scripts do **not** create/alter schema.

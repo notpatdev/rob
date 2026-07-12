@@ -37,7 +37,7 @@ Deploy scripts and prechecks:
 
 - never run DB build SQL automatically;
 - never run SQLite import automatically;
-- validate schema/permissions with `scripts.check_db`;
+- validate schema/permissions with `ops.checks.check_db`;
 - restart only the target service.
 
 Manual DB build and grants stay admin-only via pgAdmin4 / `psql` as `doadmin`.

@@ -47,7 +47,7 @@ cd /opt/rob-webhook/app
 set -a
 source .env
 set +a
-PYTHONPATH=. .venv/bin/python -m scripts.check_db
+PYTHONPATH=. .venv/bin/python -m ops.checks.check_db
 sudo systemctl restart rob-webhook-dev.service
 sudo systemctl status rob-webhook-dev.service --no-pager
 curl -fsS http://127.0.0.1:8080/health

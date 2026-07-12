@@ -40,7 +40,7 @@ cd /opt/rob-bot/app
 set -a
 source .env
 set +a
-PYTHONPATH=. .venv/bin/python -m scripts.check_db
+PYTHONPATH=. .venv/bin/python -m ops.checks.check_db
 sudo systemctl restart rob-bot-dev.service
 sudo systemctl status rob-bot-dev.service --no-pager
 sudo journalctl -u rob-bot-dev.service -n 100 --no-pager

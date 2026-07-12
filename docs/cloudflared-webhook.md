@@ -25,7 +25,7 @@ cd /opt/rob-webhook/app
 set -a
 source .env
 set +a
-PYTHONPATH=. .venv/bin/python -m scripts.check_db
+PYTHONPATH=. .venv/bin/python -m ops.checks.check_db
 sudo systemctl restart rob-webhook.service
 curl -fsS http://127.0.0.1:8080/health
 sudo bash deploy/scripts/install-cloudflared-webhook.sh

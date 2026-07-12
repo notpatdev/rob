@@ -11,12 +11,12 @@ This is a data migration only. It is not a schema build step, and it is not part
 
 Before importing data, manually apply DB build SQL (as `doadmin`) in this order:
 
-1. `scripts/db/build/001_core_schema.sql`
-2. `scripts/db/build/002_indexes.sql`
-3. `scripts/db/build/003_achievements.sql`
-4. `scripts/db/build/004_sub_send_names.sql`
-5. `scripts/db/build/005_count_recovery.sql`
-6. `scripts/db/build/006_send_change_requests.sql`
+1. `db/build/001_core_schema.sql`
+2. `db/build/002_indexes.sql`
+3. `db/build/003_achievements.sql`
+4. `db/build/004_sub_send_names.sql`
+5. `db/build/005_count_recovery.sql`
+6. `db/build/006_send_change_requests.sql`
 
 ## Safety rules
 
@@ -33,7 +33,7 @@ Run these on the soon-to-be-legacy AWS host when you want Rob to find the likely
 ### Find likely SQLite candidates
 
 ```bash
-python3 -m scripts.data_migration.legacy_server.find_sqlite_candidates
+python3 -m ops.migration.legacy_server.find_sqlite_candidates
 ```
 
 This scans common legacy roots such as `/opt`, `/srv`, `/var`, `/home/ec2-user`, and `/home/ubuntu`, then ranks candidates by Rob-shaped table fingerprints.
@@ -41,13 +41,13 @@ This scans common legacy roots such as `/opt`, `/srv`, `/var`, `/home/ec2-user`,
 ### Build a concise legacy report
 
 ```bash
-python3 -m scripts.data_migration.legacy_server.legacy_sqlite_report
+python3 -m ops.migration.legacy_server.legacy_sqlite_report
 ```
 
 Optional explicit source:
 
 ```bash
-python3 -m scripts.data_migration.legacy_server.legacy_sqlite_report \
+python3 -m ops.migration.legacy_server.legacy_sqlite_report \
   --sqlite /opt/rob-the-bot/data/rob_the_bot.sqlite3 \
   --report-json /tmp/legacy-sqlite-report.json
 ```
@@ -55,7 +55,7 @@ python3 -m scripts.data_migration.legacy_server.legacy_sqlite_report \
 ### Full rehearsal dry-run from the legacy host
 
 ```bash
-scripts/data_migration/legacy_server/legacy_to_pg_dry_run.sh \
+ops/migration/legacy_server/legacy_to_pg_dry_run.sh \
   --database-url 'postgresql://prod_rob_bot:***@host:25060/rob_dev_v2?sslmode=require'
 ```
 
@@ -69,7 +69,7 @@ This will:
 If you need to deliberately skip known duplicate or unwanted legacy Dom/me handles during rehearsal shaping, repeat `--exclude-domme-handle`:
 
 ```bash
-scripts/data_migration/legacy_server/legacy_to_pg_dry_run.sh \
+ops/migration/legacy_server/legacy_to_pg_dry_run.sh \
   --database-url 'postgresql://prod_rob_bot:***@host:25060/rob_dev_v2?sslmode=require' \
   --exclude-domme-handle missbuttercup \
   --exclude-domme-handle sirenofspoils
@@ -78,7 +78,7 @@ scripts/data_migration/legacy_server/legacy_to_pg_dry_run.sh \
 ### Real rehearsal import from the legacy host
 
 ```bash
-scripts/data_migration/legacy_server/legacy_to_pg_apply.sh \
+ops/migration/legacy_server/legacy_to_pg_apply.sh \
   --database-url 'postgresql://prod_rob_bot:***@host:25060/rob_dev_v2?sslmode=require' \
   --confirm-apply yes
 ```
@@ -88,7 +88,7 @@ This does not create schema, roles, or grants. Run the DB build SQL and grants m
 ## Inspect source only
 
 ```bash
-python3 -m scripts.data_migration.inspect_sqlite \
+python3 -m ops.migration.inspect_sqlite \
   --sqlite /opt/rob-the-bot/data/rob_the_bot.sqlite3 \
   --report-json /tmp/rob-sqlite-inspect.json
 ```
@@ -96,7 +96,7 @@ python3 -m scripts.data_migration.inspect_sqlite \
 ## Build import payload + dry-run
 
 ```bash
-python3 -m scripts.data_migration.import_sqlite_to_postgres \
+python3 -m ops.migration.import_sqlite_to_postgres \
   --sqlite /opt/rob-the-bot/data/rob_the_bot.sqlite3 \
   --database-url 'postgresql://prod_rob_bot:***@host:25060/rob_dev_v2?sslmode=require' \
   --dry-run \
@@ -106,7 +106,7 @@ python3 -m scripts.data_migration.import_sqlite_to_postgres \
 ## Real import (writes data)
 
 ```bash
-python3 -m scripts.data_migration.import_sqlite_to_postgres \
+python3 -m ops.migration.import_sqlite_to_postgres \
   --sqlite /opt/rob-the-bot/data/rob_the_bot.sqlite3 \
   --database-url 'postgresql://prod_rob_bot:***@host:25060/rob_dev_v2?sslmode=require' \
   --no-dry-run \
@@ -116,7 +116,7 @@ python3 -m scripts.data_migration.import_sqlite_to_postgres \
 Optional target reset (dangerous):
 
 ```bash
-python3 -m scripts.data_migration.import_sqlite_to_postgres \
+python3 -m ops.migration.import_sqlite_to_postgres \
   --sqlite /opt/rob-the-bot/data/rob_the_bot.sqlite3 \
   --database-url 'postgresql://prod_rob_bot:***@host:25060/rob_dev_v2?sslmode=require' \
   --no-dry-run \
@@ -156,7 +156,7 @@ This avoids silent data-shape handling during rehearsal imports.
    5. Run `legacy_to_pg_apply.sh` only after the dry-run looks correct.
 6. Validate the imported result with:
    - `rob migration audit --guild <guild_id>`
-   - `PYTHONPATH=. python3 -m scripts.check_db`
+   - `PYTHONPATH=. python3 -m ops.checks.check_db`
    - live bot/webhook rehearsal against `rob_dev_v2`
 
 If the legacy data clearly belongs to a single guild, the importer now infers that guild id automatically. Keep `--default-guild-id` as an override for multi-guild SQLite datasets or unusual legacy snapshots.

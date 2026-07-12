@@ -1,11 +1,11 @@
 # Backend Commands
 
-Use `scripts/rob` (or install the global wrapper) for operations.
+Use `ops/cli/rob` (or install the global wrapper) for operations.
 
 ## Install global command
 
 ```bash
-scripts/install-rob-global.sh
+ops/install-rob-global.sh
 ```
 
 ## Core command groups
@@ -90,9 +90,9 @@ rob clear rob_dev_v2
 
 ## DB build vs data migration
 
-- DB schema build is manual SQL in `scripts/db/build/` (run as `doadmin`).
-- Runtime grants are environment-specific SQL in `scripts/db/grants/`.
-- SQLite -> PostgreSQL data migration tooling is in `scripts/data_migration/`.
+- DB schema build is manual SQL in `db/build/` (run as `doadmin`).
+- Runtime grants are environment-specific SQL in `db/grants/`.
+- SQLite -> PostgreSQL data migration tooling is in `ops/migration/`.
 - Deploy scripts do not run schema build SQL.
 
 ## Maintenance behavior
@@ -108,7 +108,7 @@ During maintenance:
 
 ## Deploy gate
 
-Deploy scripts run `scripts/check_db.py` and stop on failure with:
+Deploy scripts run `ops/checks/check_db.py` and stop on failure with:
 
 > Database check failed.  
 > This database has not been built for Rob v2 yet, or runtime grants are incomplete.  

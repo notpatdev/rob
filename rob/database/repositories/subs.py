@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from asyncpg import Record
 
 from rob.database.connection import Database
-from rob.database.repositories.models import Sub, SubSendName
+from rob.models import Sub, SubSendName
 
 
 def _build_sub(row: Record) -> Sub:

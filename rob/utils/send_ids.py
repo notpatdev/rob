@@ -6,7 +6,7 @@ import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from rob.database.repositories.models import SendRecord
+    from rob.models import SendRecord
 
 _PUBLIC_ID_RE = re.compile(r"^ROB-(\d+)-([A-F0-9]{8})$")
 

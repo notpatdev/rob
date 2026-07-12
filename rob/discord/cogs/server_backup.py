@@ -7,7 +7,7 @@ import discord
 from discord.ext import commands, tasks
 
 from rob.config.guilds import is_new_system_guild
-from rob.database.repositories.models import GuildSettings, ServerBackupApproval
+from rob.models import GuildSettings, ServerBackupApproval
 from rob.discord.permissions import is_staff_member, member_has_role
 from rob.services.server_backup_service import BackupCycleResult
 from rob.ui.cards.errors import error_card

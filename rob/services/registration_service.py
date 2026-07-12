@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from rob.database.repositories.blacklist import BlacklistRepository
 from rob.database.repositories.dommes import DommesRepository
-from rob.database.repositories.models import Domme, Sub
+from rob.models import Domme, Sub
 from rob.database.repositories.vib_settings import VibSettingsRepository
 from rob.database.repositories.subs import SubsRepository
 from rob.services.throne_service import ThroneService

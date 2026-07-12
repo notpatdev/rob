@@ -4,7 +4,7 @@ from asyncpg import Record
 from asyncpg.exceptions import UniqueViolationError
 
 from rob.database.connection import Database
-from rob.database.repositories.models import NewSend, QueueStatus, SendRecord
+from rob.models import NewSend, QueueStatus, SendRecord
 from rob.utils.send_ids import build_public_send_id, parse_public_send_id
 
 

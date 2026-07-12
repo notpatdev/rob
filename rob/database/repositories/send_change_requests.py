@@ -3,7 +3,7 @@ from __future__ import annotations
 from asyncpg import Record
 
 from rob.database.connection import Database
-from rob.database.repositories.models import SendChangeRequest
+from rob.models import SendChangeRequest
 
 
 def _build_send_change_request(row: Record) -> SendChangeRequest:

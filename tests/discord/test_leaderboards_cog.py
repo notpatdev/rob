@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from rob.config.guilds import MAIN_GUILD_ID, TEST_GUILD_ID
-from rob.database.repositories.models import LatestTrackedSend, LeaderboardEntry, PersonalStatsSummary
+from rob.models import LatestTrackedSend, LeaderboardEntry, PersonalStatsSummary
 from rob.discord.cogs.leaderboards import LeaderboardsCog
 
 # Neither main nor test: leaderboard view gating must not apply here.

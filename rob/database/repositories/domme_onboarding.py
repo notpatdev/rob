@@ -11,7 +11,7 @@ from __future__ import annotations
 from asyncpg import Record
 
 from rob.database.connection import Database
-from rob.database.repositories.models import DommeOnboardingState
+from rob.models import DommeOnboardingState
 
 ALLOWED_STAGES: tuple[str, ...] = (
     "intro",

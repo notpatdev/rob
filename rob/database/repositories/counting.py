@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from asyncpg import Record
 
 from rob.database.connection import Database
-from rob.database.repositories.models import CountBlock, CountRecoveryWindow, CountingState
+from rob.models import CountBlock, CountRecoveryWindow, CountingState
 
 
 def _build_counting_state(row: Record) -> CountingState:

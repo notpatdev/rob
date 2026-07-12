@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from rob.config.guilds import TEST_GUILD_ID
-from rob.database.repositories.models import (
+from rob.models import (
     LeaderboardEntry,
     LeaderboardSummary,
     SendChangeRequest,

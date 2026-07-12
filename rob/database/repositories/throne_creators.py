@@ -3,7 +3,7 @@ from __future__ import annotations
 from asyncpg import Record
 
 from rob.database.connection import Database
-from rob.database.repositories.models import ThroneCreator
+from rob.models import ThroneCreator
 
 
 def _build_compat_creator(row: Record) -> ThroneCreator:

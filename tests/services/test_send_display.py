@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from rob.database.repositories.models import SendRecord
+from rob.models import SendRecord
 from rob.services.send_display import (
     UNKNOWN_SUB_DISPLAY,
     UNCLAIMED_SUB_DISPLAY,

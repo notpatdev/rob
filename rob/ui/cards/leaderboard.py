@@ -4,7 +4,7 @@ import time
 
 import discord
 
-from rob.database.repositories.models import LeaderboardEntry, LeaderboardSummary
+from rob.models import LeaderboardEntry, LeaderboardSummary
 from rob.services.leaderboard_status import LeaderboardStatus, render_leaderboard_status
 from rob.ui.render import RenderedMessage, require_components_v2
 from rob.ui.theme import COLOR_LEADERBOARD

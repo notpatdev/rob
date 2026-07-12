@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import discord
 
-from rob.database.repositories.models import SendChangeRequest, SendRecord
+from rob.models import SendChangeRequest, SendRecord
 from rob.ui.components import make_card, render
 from rob.ui.render import CardSection, RenderedMessage
 from rob.ui.theme import COLOR_DANGER, COLOR_NEUTRAL, COLOR_SUCCESS, COLOR_WARNING

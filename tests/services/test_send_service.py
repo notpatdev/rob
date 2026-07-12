@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from rob.database.repositories.models import NewSend, SendRecord, ThroneCreator
+from rob.models import NewSend, SendRecord, ThroneCreator
 from rob.services.send_service import SendService
 from rob.throne.payloads import ThroneSendPayload
 from rob.utils.fx import convert_cents_to_usd

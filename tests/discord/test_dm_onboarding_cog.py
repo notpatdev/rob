@@ -926,10 +926,10 @@ def test_read_prefs_from_interaction_parses_components_when_view_missing():
     ],
 )
 def test_notify_bot_onboarding_webhook_verified_derives_endpoint(notify_url):
-    from rob.services.bot_notify_client import notify_bot_onboarding_webhook_verified
+    from rob.opsapi.notify_client import notify_bot_onboarding_webhook_verified
     from urllib.parse import urlsplit
 
-    import rob.services.bot_notify_client as mod
+    import rob.opsapi.notify_client as mod
     from unittest.mock import patch
 
     class _Resp:

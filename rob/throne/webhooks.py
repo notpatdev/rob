@@ -13,7 +13,7 @@ from rob.database.repositories.bot_state import BotStateRepository
 from rob.database.repositories.dommes import DommesRepository
 from rob.database.repositories.sends import SendsRepository
 from rob.services.maintenance_service import MaintenanceService
-from rob.services.bot_notify_client import (
+from rob.opsapi.notify_client import (
     notify_bot_onboarding_webhook_verified,
     notify_bot_send,
 )

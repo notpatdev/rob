@@ -4,11 +4,11 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-from rob.services.bot_ops_server import (
+from rob.opsapi._support import (
     GUILD_CHANNEL_FIELDS as OPS_SERVER_CHANNEL_FIELDS,
     GUILD_ROLE_FIELDS as OPS_SERVER_ROLE_FIELDS,
 )
-from rob.services.bot_ops_server import BotOpsServer
+from rob.opsapi import BotOpsServer
 from rob.services.server_backup_service import BackupCycleResult
 from rob.database.repositories.vib_settings import CHANNEL_FIELD_NAMES, ROLE_FIELD_NAMES
 from ops.ops import (

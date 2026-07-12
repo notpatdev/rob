@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 from types import SimpleNamespace
 
 import discord
@@ -14,7 +15,10 @@ class _FakeDestination:
         self.id = user_id
         self.messages: list[dict] = []
 
-    async def send(self, **kwargs):
+    async def send(self, *args, **kwargs):
+        if args:
+            kwargs = dict(kwargs)
+            kwargs["content"] = args[0]
         self.messages.append(kwargs)
 
 
@@ -141,10 +145,11 @@ def test_report_modal_upload_is_forwarded_when_present():
     cog._resolve_destinations = _destinations  # type: ignore[method-assign]
 
     class _FakeAttachment:
+        filename = "screenshot.png"
         url = "https://example.test/screenshot.png"
 
         async def to_file(self, **_kwargs):
-            return object()
+            return discord.File(io.BytesIO(b"image-bytes"), filename=self.filename)
 
     asyncio.run(
         cog.submit_report(

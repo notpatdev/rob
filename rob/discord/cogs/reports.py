@@ -114,7 +114,30 @@ class ReportsCog(commands.Cog):
                 continue
             return bytes(data), filename, description
 
-        return None
+        try:
+            file_obj = await attachment.to_file(use_cached=True)
+        except TypeError:
+            try:
+                file_obj = await attachment.to_file()
+            except (AttributeError, TypeError, discord.HTTPException):
+                return None
+        except (AttributeError, discord.HTTPException):
+            return None
+
+        fp = getattr(file_obj, "fp", None)
+        if fp is None:
+            return None
+        try:
+            if hasattr(fp, "seek"):
+                fp.seek(0)
+            data = fp.read()
+        except (AttributeError, OSError, ValueError):
+            return None
+        if isinstance(data, str):
+            data = data.encode()
+        return bytes(data), getattr(file_obj, "filename", filename), getattr(
+            file_obj, "description", description
+        )
 
     async def submit_report(
         self,

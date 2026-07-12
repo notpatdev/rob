@@ -5,12 +5,13 @@ from types import SimpleNamespace
 
 import discord
 
-from rob.config.guilds import OWNER_USER_ID
+from rob.config.guilds import BOT_OWNER_USER_IDS
 from rob.discord.cogs.reports import ReportsCog
 
 
 class _FakeDestination:
-    def __init__(self):
+    def __init__(self, user_id: int):
+        self.id = user_id
         self.messages: list[dict] = []
 
     async def send(self, **kwargs):
@@ -39,7 +40,9 @@ class _FakeInteraction:
 class _FakeBot:
     def __init__(self):
         self.guild_settings_repo = SimpleNamespace(get=self._get_settings)
-        self.destination = _FakeDestination()
+        self.destinations = {
+            user_id: _FakeDestination(user_id) for user_id in BOT_OWNER_USER_IDS
+        }
         self.requested_user_ids: list[int] = []
 
     async def _get_settings(self, _guild_id: int):
@@ -47,11 +50,11 @@ class _FakeBot:
 
     def get_user(self, user_id: int):
         self.requested_user_ids.append(user_id)
-        return self.destination
+        return self.destinations[user_id]
 
     async def fetch_user(self, user_id: int):
         self.requested_user_ids.append(user_id)
-        return self.destination
+        return self.destinations[user_id]
 
 
 def test_report_command_opens_modal():
@@ -76,10 +79,10 @@ def test_report_requires_yes_acknowledgement():
     cog = ReportsCog(bot)
     interaction = _FakeInteraction()
 
-    async def _no_destination(_interaction):
-        return bot.destination
+    async def _destinations(_interaction):
+        return [bot.destinations[user_id] for user_id in BOT_OWNER_USER_IDS]
 
-    cog._resolve_destination = _no_destination  # type: ignore[method-assign]
+    cog._resolve_destinations = _destinations  # type: ignore[method-assign]
     asyncio.run(
         cog.submit_report(
             interaction,
@@ -97,10 +100,10 @@ def test_report_posts_to_configured_destination_and_confirms_user():
     cog = ReportsCog(bot)
     interaction = _FakeInteraction()
 
-    async def _destination(_interaction):
-        return bot.destination
+    async def _destinations(_interaction):
+        return [bot.destinations[user_id] for user_id in BOT_OWNER_USER_IDS]
 
-    cog._resolve_destination = _destination  # type: ignore[method-assign]
+    cog._resolve_destinations = _destinations  # type: ignore[method-assign]
     asyncio.run(
         cog.submit_report(
             interaction,
@@ -110,21 +113,21 @@ def test_report_posts_to_configured_destination_and_confirms_user():
         )
     )
 
-    assert bot.destination.messages
+    assert all(destination.messages for destination in bot.destinations.values())
     assert interaction.response.messages[0]["ephemeral"] is True
 
 
-def test_report_destination_is_the_configured_operator():
-    # Reports must be DM'd to the configured operator user id, never a server
+def test_report_destinations_are_the_configured_bot_owners():
+    # Reports must be DM'd to the configured bot-owner user ids, never a server
     # report channel or the Discord application owner.
     bot = _FakeBot()
     cog = ReportsCog(bot)
     interaction = _FakeInteraction()
 
-    destination = asyncio.run(cog._resolve_destination(interaction))
+    destinations = asyncio.run(cog._resolve_destinations(interaction))
 
-    assert destination is bot.destination
-    assert bot.requested_user_ids == [OWNER_USER_ID]
+    assert [destination.id for destination in destinations] == list(BOT_OWNER_USER_IDS)
+    assert bot.requested_user_ids == list(BOT_OWNER_USER_IDS)
 
 
 def test_report_modal_upload_is_forwarded_when_present():
@@ -132,10 +135,10 @@ def test_report_modal_upload_is_forwarded_when_present():
     cog = ReportsCog(bot)
     interaction = _FakeInteraction()
 
-    async def _destination(_interaction):
-        return bot.destination
+    async def _destinations(_interaction):
+        return [bot.destinations[user_id] for user_id in BOT_OWNER_USER_IDS]
 
-    cog._resolve_destination = _destination  # type: ignore[method-assign]
+    cog._resolve_destinations = _destinations  # type: ignore[method-assign]
 
     class _FakeAttachment:
         url = "https://example.test/screenshot.png"
@@ -154,7 +157,10 @@ def test_report_modal_upload_is_forwarded_when_present():
 
     # Components V2 cards suppress attachment previews, so the file goes out as
     # a separate follow-up message.
-    assert any("file" in message for message in bot.destination.messages)
+    assert all(
+        any("file" in message for message in destination.messages)
+        for destination in bot.destinations.values()
+    )
 
 
 def test_report_modal_upload_falls_back_to_attachment_read():
@@ -162,10 +168,10 @@ def test_report_modal_upload_falls_back_to_attachment_read():
     cog = ReportsCog(bot)
     interaction = _FakeInteraction()
 
-    async def _destination(_interaction):
-        return bot.destination
+    async def _destinations(_interaction):
+        return [bot.destinations[user_id] for user_id in BOT_OWNER_USER_IDS]
 
-    cog._resolve_destination = _destination  # type: ignore[method-assign]
+    cog._resolve_destinations = _destinations  # type: ignore[method-assign]
 
     class _FakeAttachment:
         filename = "screenshot.png"
@@ -187,6 +193,7 @@ def test_report_modal_upload_falls_back_to_attachment_read():
         )
     )
 
-    file_messages = [message for message in bot.destination.messages if "file" in message]
-    assert file_messages
-    assert file_messages[0]["file"].filename == "screenshot.png"
+    for destination in bot.destinations.values():
+        file_messages = [message for message in destination.messages if "file" in message]
+        assert file_messages
+        assert file_messages[0]["file"].filename == "screenshot.png"

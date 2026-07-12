@@ -5,6 +5,9 @@ from collections.abc import Iterable
 from rob.database.repositories.models import SendRecord
 from rob.throne.payloads import is_known_test_sender
 
+UNKNOWN_SUB_DISPLAY = "A sub Rob knows not of"
+UNCLAIMED_SUB_DISPLAY = "Sub with no nickname claimed"
+
 
 def build_sub_display(send: SendRecord, *, test_gifter_usernames: Iterable[str] = ()) -> str:
     sub_name = (send.sub_name or "").strip()
@@ -15,8 +18,8 @@ def build_sub_display(send: SendRecord, *, test_gifter_usernames: Iterable[str] 
     if send.sub_user_id is not None:
         return f"<@{send.sub_user_id}>"
     if sub_name:
-        return f"{sub_name} with no nickname claimed"
-    return "Sub with no nickname claimed"
+        return UNKNOWN_SUB_DISPLAY
+    return UNCLAIMED_SUB_DISPLAY
 
 
 def format_send_source(send: SendRecord) -> str:

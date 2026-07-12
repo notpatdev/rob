@@ -10,7 +10,7 @@ from rob.database.repositories.models import (
     SendRecord,
 )
 from rob.services.leaderboard_status import LeaderboardStatus
-from rob.services.send_display import build_sub_display
+from rob.services.send_display import UNKNOWN_SUB_DISPLAY, build_sub_display
 from rob.ui.cards.leaderboard import leaderboard_card, leaderboard_stats_card
 from rob.ui.cards.send_change_requests import send_change_request_card
 from rob.ui.cards.send import send_card
@@ -103,7 +103,7 @@ def test_send_card_renders_thumbnail_image_and_currency_name():
 
 
 def test_send_card_without_image_uses_text_display_and_no_footer():
-    msg = send_card(send=_send("gifter_name"), domme_label="@Domme", sub_display="gifter_name with no nickname claimed")
+    msg = send_card(send=_send("gifter_name"), domme_label="@Domme", sub_display=UNKNOWN_SUB_DISPLAY)
     container = msg.view.children[0]
     contents = "\n".join(str(getattr(ch, "content", "")) for ch in container.children)
     assert [type(child).__name__ for child in container.children] == [
@@ -112,7 +112,7 @@ def test_send_card_without_image_uses_text_display_and_no_footer():
         "TextDisplay",
     ]
     assert "New Send to @Domme" in contents
-    assert "gifter_name with no nickname claimed" in contents
+    assert UNKNOWN_SUB_DISPLAY in contents
     assert "Random Fact:" not in contents
     assert "Rob Send ID" not in contents
 
@@ -150,7 +150,7 @@ def test_send_card_adjustment_note_placement_and_non_usd_currency_display():
     msg = send_card(
         send=send,
         domme_label="@Domme",
-        sub_display="gifter_name with no nickname claimed",
+        sub_display=UNKNOWN_SUB_DISPLAY,
         adjustment_note="-# NOTE: This send has been adjusted by Pat on 1717000000 | Reason: Price correction",
     )
     container = msg.view.children[0]
@@ -204,7 +204,7 @@ def test_send_card_shows_real_usd_conversion_with_original_currency_metadata():
     msg = send_card(
         send=send,
         domme_label="@Domme",
-        sub_display="gifter_name with no nickname claimed",
+        sub_display=UNKNOWN_SUB_DISPLAY,
     )
     contents = "\n".join(str(getattr(ch, "content", "")) for ch in msg.view.children[0].children)
     assert "$11.98 (converted from EUR 10.99 (Euro))" in contents

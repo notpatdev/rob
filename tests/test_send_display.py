@@ -3,7 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from rob.database.repositories.models import SendRecord
-from rob.services.send_display import build_sub_display
+from rob.services.send_display import (
+    UNKNOWN_SUB_DISPLAY,
+    UNCLAIMED_SUB_DISPLAY,
+    build_sub_display,
+)
 
 
 def _send(sub_name: str | None, *, sub_user_id: int | None = None) -> SendRecord:
@@ -49,9 +53,9 @@ def test_registered_sub_displays_discord_mention():
     assert build_sub_display(_send("gifter_name", sub_user_id=123)) == "<@123>"
 
 
-def test_unclaimed_named_sender_displays_claim_hint():
-    assert build_sub_display(_send("gifter_name")) == "gifter_name with no nickname claimed"
+def test_unlinked_named_sender_uses_generic_unknown_sub_copy():
+    assert build_sub_display(_send("gifter_name")) == UNKNOWN_SUB_DISPLAY
 
 
 def test_missing_sender_displays_generic_unclaimed_copy():
-    assert build_sub_display(_send(None)) == "Sub with no nickname claimed"
+    assert build_sub_display(_send(None)) == UNCLAIMED_SUB_DISPLAY

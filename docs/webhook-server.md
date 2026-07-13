@@ -90,6 +90,6 @@ through a public reverse proxy — see `docs/bot-server.md`.
 - `THRONE_TEST_GIFTER_USERNAMES` controls sender-name-based test detection (default `marie_123`).
 - Known test senders are still inserted as `sends` rows so the public send tracker flow can render, but those rows are stored with `is_test_send=true`.
 - When `THRONE_PARSE_TEST_SENDS_AS_REAL_SENDS=false`, known test-sender rows are excluded from leaderboard totals, stats, and leader alerts unless the recipient matches `THRONE_TEST_SEND_LEADERBOARD_OWNER_USER_ID`.
-- If test parsing was previously enabled, `scripts/rob throne invalidate-test-sends` can backfill historical known test sender rows to `is_test_send=true`.
+- If test parsing was previously enabled, `ops/cli/rob throne invalidate-test-sends` can backfill historical known test sender rows to `is_test_send=true`.
 - Explicit test/setup payloads are always setup-only and never inserted as sends.
 - Webhook payload `price`/`amount` values are treated as authoritative minor currency units for send amounts.

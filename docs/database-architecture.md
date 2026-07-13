@@ -79,7 +79,7 @@ Preferred production URL base:
 
 ## Runtime DB check behavior
 
-`scripts/check_db.py` validates:
+`ops/checks/check_db.py` validates:
 
 1. required v2 tables/columns
 2. required `db_build_version` entries (`001_core_schema`, `002_indexes`, `003_achievements`, `004_sub_send_names`, `005_count_recovery`, `006_send_change_requests`)

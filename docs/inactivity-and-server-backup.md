@@ -150,6 +150,6 @@ rob backup run --guild <guild_id>   # run one cycle now (via the running bot)
 
 ## Database
 
-Run the build scripts (`scripts/db/build/012_inactivity_backup_settings.sql`,
+Run the build scripts (`db/build/012_inactivity_backup_settings.sql`,
 `013_server_backups.sql`) and then the relevant grants file. See
-`scripts/db/build/README.md`.
+`db/build/README.md`.

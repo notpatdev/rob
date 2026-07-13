@@ -29,21 +29,21 @@ Rob achievements are definition-driven in code, with per-user unlock state store
 Run manually as `doadmin`:
 
 1. Ensure base DB build scripts are already applied:
-   - `scripts/db/build/001_core_schema.sql`
-   - `scripts/db/build/002_indexes.sql`
+   - `db/build/001_core_schema.sql`
+   - `db/build/002_indexes.sql`
 2. Apply achievements and current rehearsal extensions:
-   - `scripts/db/build/003_achievements.sql`
-   - `scripts/db/build/004_sub_send_names.sql`
-   - `scripts/db/build/005_count_recovery.sql`
-   - `scripts/db/build/006_send_change_requests.sql`
+   - `db/build/003_achievements.sql`
+   - `db/build/004_sub_send_names.sql`
+   - `db/build/005_count_recovery.sql`
+   - `db/build/006_send_change_requests.sql`
 3. Re-run the relevant grants file:
-   - dev rehearsal: `scripts/db/grants/dev_rehearsal_prod_roles.sql`
-   - prod bot: `scripts/db/grants/prod_rob_bot.sql`
-   - prod webhook: `scripts/db/grants/prod_rob_webhook.sql`
+   - dev rehearsal: `db/grants/dev_rehearsal_prod_roles.sql`
+   - prod bot: `db/grants/prod_rob_bot.sql`
+   - prod webhook: `db/grants/prod_rob_webhook.sql`
 4. Validate with runtime credentials:
-   - `PYTHONPATH=. python3 -m scripts.check_db`
+   - `PYTHONPATH=. python3 -m ops.checks.check_db`
 
-If `scripts.check_db.py` reports achievement tables missing, apply the SQL manually and rerun the check.
+If `ops.checks.check_db.py` reports achievement tables missing, apply the SQL manually and rerun the check.
 
 ## Slash commands
 

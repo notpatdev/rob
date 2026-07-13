@@ -29,7 +29,7 @@ Deployment does **not**:
 - overwrite `.env`;
 - print secrets.
 
-Deployment pre-check and deploy scripts validate DB readiness via `scripts/check_db.py`, but do not mutate schema.
+Deployment pre-check and deploy scripts validate DB readiness via `ops/checks/check_db.py`, but do not mutate schema.
 
 ## Manual DB build remains separate
 
@@ -75,7 +75,7 @@ Current production examples live in:
 
 The webhook host should stay on `127.0.0.1:8080` behind Cloudflared, and it should notify the bot over the private ops bridge (`ROB_BOT_NOTIFY_URL`) instead of polling the database for send cards.
 
-If either service points at an older database, `scripts/check_db.py` will fail because Rob v2 expects `db_build_version` and the new v2 schema tables.
+If either service points at an older database, `ops/checks/check_db.py` will fail because Rob v2 expects `db_build_version` and the new v2 schema tables.
 
 ## Manual DB bootstrap
 

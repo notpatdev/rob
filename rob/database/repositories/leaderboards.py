@@ -798,7 +798,3 @@ class LeaderboardsRepository:
             )
         assert row is not None
         return _build_message_ref(row)
-
-
-# v2 naming alias
-VibLeaderboardRepository = LeaderboardsRepository

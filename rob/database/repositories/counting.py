@@ -277,7 +277,3 @@ class CountingRepository:
             )
         assert row is not None
         return _build_count_block(row)
-
-
-# Backward-compat alias while services transition to v2 naming.
-TheCountRepository = CountingRepository

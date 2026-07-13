@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import discord
-from rob.services.bot_ops_server import BotOpsServer
+from rob.opsapi import BotOpsServer
 
 
 class _FakeRequest:

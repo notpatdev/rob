@@ -40,7 +40,7 @@ from rob.discord.cogs.settings import SettingsCog
 from rob.discord.cogs.voice_transcription import VoiceTranscriptionCog
 from rob.discord.cogs.warn_relay import WarnRelayCog
 from rob.services.counting_service import CountingService
-from rob.services.bot_ops_server import BotOpsServer
+from rob.opsapi import BotOpsServer
 from rob.services.dm_onboarding_service import DMOnboardingService
 from rob.services.inactivity_service import InactivityService
 from rob.services.leaderboard_service import LeaderboardService

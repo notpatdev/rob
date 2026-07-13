@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from rob.database.repositories.models import CountBlock, CountRecoveryWindow, CountingState
+from rob.models import CountBlock, CountRecoveryWindow, CountingState
 from rob.services.counting_service import CountingService
 from rob.ui.emojis import ROBBLANK, ROBNO, ROBYES
 

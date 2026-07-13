@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from rob.config.guilds import TEST_GUILD_ID
-from rob.database.repositories.models import SendRecord
+from rob.models import SendRecord
 from rob.services.send_queue_service import SendQueueService
 
 

@@ -5,7 +5,7 @@ from datetime import datetime
 from asyncpg import Record
 
 from rob.database.connection import Database
-from rob.database.repositories.models import (
+from rob.models import (
     LatestTrackedSend,
     LeaderboardEntry,
     LeaderboardDiagnostics,

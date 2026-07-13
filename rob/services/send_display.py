@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from rob.database.repositories.models import SendRecord
+from rob.models import SendRecord
 from rob.throne.payloads import is_known_test_sender
 
 UNKNOWN_SUB_DISPLAY = "A sub Rob knows not of"

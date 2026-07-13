@@ -4,7 +4,7 @@ import json
 
 from rob.database.repositories.bot_state import BotStateRepository
 from rob.config.guilds import is_main_guild
-from rob.database.repositories.models import MaintenanceState
+from rob.models import MaintenanceState
 from rob.services.leaderboard_status import LeaderboardStatus
 from rob.utils.time import utc_now
 

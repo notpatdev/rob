@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import discord
 
-from rob.database.repositories.models import SendRecord
+from rob.models import SendRecord
 from rob.ui.render import RenderedMessage, require_components_v2
 from rob.ui.theme import COLOR_SEND
 from rob.utils.money import format_money_from_cents, format_money_with_currency_name

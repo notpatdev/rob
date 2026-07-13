@@ -3,7 +3,7 @@ from __future__ import annotations
 from asyncpg import Record
 
 from rob.database.connection import Database
-from rob.database.repositories.models import VibSettings
+from rob.models import VibSettings
 
 
 CHANNEL_FIELD_NAMES = {

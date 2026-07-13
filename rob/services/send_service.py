@@ -4,7 +4,7 @@ import inspect
 import logging
 
 from rob.database.repositories.leaderboards import LeaderboardsRepository
-from rob.database.repositories.models import Domme, NewSend, SendRecord
+from rob.models import Domme, NewSend, SendRecord
 from rob.database.repositories.sends import SendsRepository
 from rob.database.repositories.subs import SubsRepository
 from rob.services.maintenance_service import MaintenanceService

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import discord
 
-from rob.database.repositories.models import GuildSettings
+from rob.models import GuildSettings
 
 
 def member_has_role(member: discord.abc.User | discord.Member | None, role_id: int | None) -> bool:

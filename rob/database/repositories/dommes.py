@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from asyncpg import Record
 
 from rob.database.connection import Database
-from rob.database.repositories.models import Domme
+from rob.models import Domme
 
 
 def _build_domme(row: Record) -> Domme:

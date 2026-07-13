@@ -12,7 +12,7 @@ from typing import Any
 from asyncpg import Record
 
 from rob.database.connection import Database
-from rob.database.repositories.models import ServerBackup, ServerBackupApproval
+from rob.models import ServerBackup, ServerBackupApproval
 
 
 def _loads(raw: Any, default: Any) -> Any:

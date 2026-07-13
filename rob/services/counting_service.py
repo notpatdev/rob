@@ -13,7 +13,7 @@ from rob.database.repositories.bot_settings import BotSettingsRepository
 from rob.database.repositories.counting import CountingRepository
 from rob.database.repositories.dommes import DommesRepository
 from rob.database.repositories.guild_settings import GuildSettingsRepository
-from rob.database.repositories.models import CountRecoveryWindow
+from rob.models import CountRecoveryWindow
 from rob.database.repositories.subs import SubsRepository
 from rob.services.send_display import is_known_test_sender
 from rob.ui.cards.counting import (

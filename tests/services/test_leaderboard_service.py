@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from rob.database.repositories.models import LeaderboardEntry, LeaderboardSummary
+from rob.models import LeaderboardEntry, LeaderboardSummary
 from rob.services.leaderboard_service import LeaderboardService
 
 

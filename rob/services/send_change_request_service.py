@@ -6,7 +6,7 @@ import time
 import discord
 
 from rob.database.repositories.dommes import DommesRepository
-from rob.database.repositories.models import Domme, SendChangeRequest, SendRecord
+from rob.models import Domme, SendChangeRequest, SendRecord
 from rob.database.repositories.send_change_requests import SendChangeRequestsRepository
 from rob.database.repositories.sends import SendsRepository
 from rob.services.leaderboard_service import LeaderboardService

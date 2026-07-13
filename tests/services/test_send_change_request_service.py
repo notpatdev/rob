@@ -4,8 +4,8 @@ import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from rob.database.repositories.models import Domme, SendChangeRequest
-from rob.database.repositories.models import SendRecord
+from rob.models import Domme, SendChangeRequest
+from rob.models import SendRecord
 from rob.services.send_change_request_service import SendChangeRequestService
 
 

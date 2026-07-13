@@ -12,7 +12,7 @@ from rob.config.guilds import is_new_system_guild
 from rob.database.repositories.bot_state import BotStateRepository
 from rob.database.repositories.guild_settings import GuildSettingsRepository
 from rob.database.repositories.leaderboards import LeaderboardsRepository
-from rob.database.repositories.models import LeaderboardEntry, LeaderboardSummary
+from rob.models import LeaderboardEntry, LeaderboardSummary
 from rob.ui.cards.leaderboard import leaderboard_card, leaderboard_stats_card
 from rob.ui.cards.maintenance import rob_offline_embed
 from rob.services.leaderboard_status import LeaderboardStatus

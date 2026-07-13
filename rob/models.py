@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from rob.utils.send_ids import build_public_send_id
+
 
 @dataclass(frozen=True)
 class VibSettings:
@@ -167,8 +169,6 @@ class SendRecord:
 
     @property
     def public_send_id(self) -> str:
-        from rob.utils.send_ids import build_public_send_id
-
         return self._public_send_id or build_public_send_id(self)
 
     @property

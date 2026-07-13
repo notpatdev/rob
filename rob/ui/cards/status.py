@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from rob.database.repositories.models import MaintenanceState, QueueStatus
+from rob.models import MaintenanceState, QueueStatus
 from rob.ui.components import make_card, render
 from rob.ui.copy import STATUS_FOOTER
 from rob.ui.render import CardSection

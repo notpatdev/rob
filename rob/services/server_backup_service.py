@@ -34,7 +34,7 @@ import discord
 
 from rob.database.repositories.bot_state import BotStateRepository
 from rob.database.repositories.guild_settings import GuildSettingsRepository
-from rob.database.repositories.models import ServerBackup, ServerBackupApproval
+from rob.models import ServerBackup, ServerBackupApproval
 from rob.database.repositories.server_backups import ServerBackupsRepository
 
 log = logging.getLogger(__name__)

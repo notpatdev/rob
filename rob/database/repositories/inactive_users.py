@@ -9,7 +9,7 @@ from datetime import datetime
 from asyncpg import Record
 
 from rob.database.connection import Database
-from rob.database.repositories.models import InactiveUser
+from rob.models import InactiveUser
 
 
 def _build(row: Record) -> InactiveUser:

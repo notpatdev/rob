@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from rob.database.repositories.models import NewSend, SendRecord
+from rob.models import NewSend, SendRecord
 from rob.database.repositories.sends import SendsRepository
 from rob.utils.send_ids import build_public_send_id
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import inspect
 
 from rob.database.repositories.dommes import DommesRepository
-from rob.database.repositories.models import Domme
+from rob.models import Domme
 
 
 def test_domme_dataclass_exposes_new_preference_fields():

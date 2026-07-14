@@ -21,7 +21,7 @@ FINBOT_URL = "https://www.thefinbot.xyz/"
 ROB_WEBSITE_URL = "https://www.robthebot.com/"
 PIGEON_URL = "https://pigeonbot.xyz"
 
-_TITLE = "## Rob is saying Goodbye, for now..."
+_TITLE = "## Good afternoon, good evening & goodnight..."
 
 # Intro paragraphs, joined with blank lines for clear spacing.
 _INTRO = "\n\n".join(

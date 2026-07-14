@@ -3,7 +3,7 @@
 This report compares:
 
 - Old bot: `/Users/patfaint/Documents/rob-the-bot-legacy`
-- Current v2: `patdadev/rob`
+- Current v2: `foolishbuilder/rob`
 
 Inspection used direct source reads from old files (not only historical docs), including:
 

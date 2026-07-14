@@ -2,7 +2,7 @@
 
 The old split deploy workflows have been replaced by a single workflow: **Deploy Rob Codebase** in `.github/workflows/deploy-codebase.yml`.
 
-The canonical Rob repo is now `patdadev/rob`. Any earlier rehearsal/bootstrap repo references should be treated as legacy history, not as the live source of truth, and not as a code-history merge from the legacy `notpatdev/robthebot` repository.
+The canonical Rob repo is now `foolishbuilder/rob`. Any earlier rehearsal/bootstrap repo references should be treated as legacy history, not as the live source of truth, and not as a code-history merge from the legacy `notpatdev/robthebot` repository.
 
 ## Deployment flow
 
@@ -51,7 +51,7 @@ SQLite data migration remains separate and is not part of deployment.
 
 When bootstrapping a fresh host or validating a fresh checkout:
 
-1. Clone from `https://github.com/patdadev/rob.git`.
+1. Clone from `https://github.com/foolishbuilder/rob.git`.
 2. Copy Actions secrets, environments, and protection rules into the active repo if GitHub is being rebuilt.
 3. Verify workflow wiring in the active repo before deploy.
 4. Rehearse services and imported data against `rob_dev_v2` if you are doing a migration dry run.

@@ -53,8 +53,8 @@ def test_prod_installers_use_prod_database_and_service_names():
     bot_template = bot_text.split("cat > \"${env_file}\" <<'EOF'", 1)[1].split('EOF', 1)[0]
     webhook_template = webhook_text.split("cat > \"${env_file}\" <<'EOF'", 1)[1].split('EOF', 1)[0]
 
-    assert "https://github.com/patdadev/rob.git" in bot_text
-    assert "https://github.com/patdadev/rob.git" in webhook_text
+    assert "https://github.com/foolishbuilder/rob.git" in bot_text
+    assert "https://github.com/foolishbuilder/rob.git" in webhook_text
     assert "rob-bot.service" in bot_text
     assert "rob-webhook.service" in webhook_text
     assert "check-bot-runtime.sh" in bot_text

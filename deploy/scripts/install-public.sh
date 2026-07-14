@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # separate service, user-owned .env, and port. The public API MUST use the
 # SELECT-only prod_rob_public database role — never the webhook/bot writer role.
 
-REPO_URL="${REPO_URL:-https://github.com/patdadev/rob.git}"
+REPO_URL="${REPO_URL:-https://github.com/foolishbuilder/rob.git}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 APP_ROOT="${APP_ROOT:-/opt/rob-public}"
 APP_DIR="${APP_DIR:-${APP_ROOT}/app}"

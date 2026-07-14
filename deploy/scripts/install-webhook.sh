@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/patdadev/rob.git}"
+REPO_URL="${REPO_URL:-https://github.com/foolishbuilder/rob.git}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 APP_ROOT="${APP_ROOT:-/opt/rob-webhook}"
 APP_DIR="${APP_DIR:-${APP_ROOT}/app}"

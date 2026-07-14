@@ -62,14 +62,24 @@ def _totals(rows: list[PublicSendRow]) -> list[dict]:
     )
 
 
-def build_sends_payload(username: str, rows: list[PublicSendRow]) -> dict:
-    """Assemble the response body. ``rows`` must be newest-first and non-empty."""
+def build_sends_payload(
+    username: str,
+    rows: list[PublicSendRow],
+    *,
+    domme_label: str | None = None,
+) -> dict:
+    """Assemble the response body. ``rows`` must be newest-first and non-empty.
+
+    ``domme_label`` is set when the username resolved to a Dom/me (recipient);
+    the per-row ``sub_name`` is the sender, so it can't stand in for their name.
+    """
     newest = rows[0]
     return {
         "username": username,
-        # The stored casing of the most recent matching send is the friendliest
-        # display name we have without touching any Discord identity.
-        "resolved_display_name": newest.sub_name or username,
+        # For a Dom/me, use their registered label; for a sub, the stored casing
+        # of their most recent send is the friendliest name we have — neither
+        # touches a Discord identity.
+        "resolved_display_name": domme_label or newest.sub_name or username,
         "last_updated": iso_z(newest.sent_at),
         "total_count": len(rows),
         "totals": _totals(rows),
@@ -98,9 +108,14 @@ async def handle_public_sends(request: web.Request) -> web.Response:
             status=404,
         )
 
+    domme_label = await repository.domme_label_for_username(
+        guild_id=PUBLIC_GUILD_ID,
+        username=username,
+    )
     log.info(
-        "Public sends served username=%r rows=%s",
+        "Public sends served username=%r rows=%s domme=%s",
         username,
         len(rows),
+        domme_label is not None,
     )
-    return web.json_response(build_sends_payload(username, rows))
+    return web.json_response(build_sends_payload(username, rows, domme_label=domme_label))

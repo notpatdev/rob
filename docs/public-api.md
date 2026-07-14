@@ -72,9 +72,17 @@ Always **200** (empty data → zeros / `null`).
 
 ## `GET /public/sends?username={throne_username}`
 
-Returns every **counted send** for a Rob user, matched case-insensitively
-against `sends.sub_name` and scoped to the main guild
-(`1485460387355820034`).
+Returns every **counted send** for a Rob user, scoped to the main guild
+(`1485460387355820034`). The `username` is matched case-insensitively against
+**both**:
+
+- `sends.sub_name` — the **sub** who *sent* (their sends), and
+- `dommes.throne_handle` — the **Dom/me** who *received* (sends to them).
+
+Throne usernames are globally unique, so a name resolves to one person; a Dom/me
+who also sends sees both. `resolved_display_name` is the Dom/me's registered
+label when the username is a Dom/me handle, otherwise the stored casing of the
+most recent matching send.
 
 A **counted send** (same definition as the leaderboard) is:
 
@@ -114,7 +122,8 @@ Returns **404** when no counted sends match.
 }
 ```
 
-- `resolved_display_name` is the stored casing of the most recent matching send.
+- `resolved_display_name` — see the matching note above (Dom/me label, else the
+  most recent send's stored casing).
 - `totals` are grouped per currency, largest total first.
 - Timestamps are UTC ISO-8601 with a trailing `Z`.
 

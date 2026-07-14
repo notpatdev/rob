@@ -10,6 +10,12 @@ from rob.ui.cards.shutdown import (
     shutdown_sent_card,
 )
 
+# NOTE: The announcement wording is owner-editable prose that changes often.
+# These tests deliberately assert card *structure* (sections, styling, buttons)
+# rather than exact copy, so editing the message text never breaks the build /
+# deploy. The URLs are compared against the module constants (imported below),
+# so changing a link constant doesn't break these tests either.
+
 
 def _iter_items(view: discord.ui.LayoutView):
     """Depth-first, document-order walk of every component in a LayoutView."""
@@ -41,21 +47,15 @@ def _link_buttons(view: discord.ui.LayoutView) -> list[discord.ui.Button]:
     ]
 
 
-def test_announcement_has_heading_intro_timeline_and_closing():
+def test_announcement_is_heading_plus_three_sections():
+    # Structure only (no exact wording): a heading followed by intro, timeline,
+    # and closing — four non-empty text blocks, the first a markdown heading.
     view = shutdown_announcement_card().view
     blocks = _text_blocks(view)
-    joined = "\n".join(blocks)
 
-    assert any(block.startswith("## Rob is saying Goodbye, for now...") for block in blocks)
-    assert "taking Rob offline" in joined
-    # Timeline milestones with bolded date labels.
-    assert "**Now:**" in joined
-    assert "**16th of July at 8am (AEST):**" in joined
-    assert "**20th of July at 8am (AEST):**" in joined
-    assert "**1st of August at 8am (AEST):**" in joined
-    # The privacy / anonymisation note.
-    assert "anonymised" in joined
-    assert "Thank you for being part of Rob." in joined
+    assert len(blocks) == 4
+    assert blocks[0].lstrip().startswith("#")
+    assert all(block.strip() for block in blocks)
 
 
 def test_announcement_has_no_accent_colour():
@@ -80,16 +80,16 @@ def test_announcement_uses_large_section_separators():
     )
 
 
-def test_announcement_has_three_link_buttons_with_expected_urls():
+def test_announcement_has_three_link_buttons_to_configured_urls():
     view = shutdown_announcement_card().view
     buttons = _link_buttons(view)
 
-    labels = [button.label for button in buttons]
     urls = [button.url for button in buttons]
-
-    assert labels == ["FinBot", "Rob Website", "Pigeon"]
+    # URLs come from module constants (imported here), so editing a link
+    # constant keeps this test passing.
     assert urls == [FINBOT_URL, ROB_WEBSITE_URL, PIGEON_URL]
-    # Link buttons carry no custom_id, so no persistent-view registration.
+    # Every button has a visible label and no custom_id (stateless link button).
+    assert all(button.label and button.label.strip() for button in buttons)
     assert all(button.custom_id is None for button in buttons)
 
 

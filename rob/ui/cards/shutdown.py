@@ -45,10 +45,10 @@ _TIMELINE = "\n\n".join(
         "website and download a record of all of your sends (for both Dom/me's "
         "and Subs).",
         "**16th of July at 8am (AEST):** Rob's core features such as Send "
-        "Tracking, Send Leaderboard, Count Tracking, inactivity, etc. will be "
+        "Tracking, Send Leaderboard and inactivity will be "
         "turned off. Rob's backend will continue to track any sends made on "
         "Throne during this period and manual send addition will continue to "
-        "work.",
+        "work. The count will continue to be tracked.",
         "**20th of July at 8am (AEST):** Rob will cease to track sends and all "
         "webhook URL's provided to Dom/me's will be made invalid.",
         "**1st of August at 8am (AEST):** Any further systems still active on Rob "
@@ -65,14 +65,14 @@ _TIMELINE = "\n\n".join(
 _CLOSING = "\n\n".join(
     (
         "Allowing you to pull your own send data means you can, if you wish, use "
-        "FinBot — which has been around longer than Rob — to manually track your "
+        "FinBot, which has been around longer than Rob,to manually track your "
         "sends.",
         "Below are 3 links: 1. the link to FinBot (should you wish to use it), "
         "2. the link to the Rob website, 3. the link to the new Pigeon bot "
-        "website.",
-        "I will take time off Discord and check in every now and then, and in a "
-        "month's time I will begin planning to build the Pigeon bot, with a hope "
-        "to have it online by the end of the year.",
+        "website. (Work in Progress)",
+        "My activity on Discord will also be small as I plan out and prepare mentally"
+        " to build Pigeon in a months time with hopes to have it active"
+        " by the end of the year.",
         "Thank you for being part of Rob.",
     )
 )

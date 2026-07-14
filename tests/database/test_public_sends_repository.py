@@ -34,18 +34,24 @@ def _row(**overrides) -> dict:
 
 
 class _FakeConnection:
-    def __init__(self, rows):
+    def __init__(self, rows, *, fetchrow_result=None):
         self.rows = rows
         self.fetch_calls: list[tuple[str, tuple]] = []
+        self.fetchrow_calls: list[tuple[str, tuple]] = []
+        self.fetchrow_result = fetchrow_result
 
     async def fetch(self, query: str, *params):
         self.fetch_calls.append((query, params))
         return list(self.rows)
 
+    async def fetchrow(self, query: str, *params):
+        self.fetchrow_calls.append((query, params))
+        return self.fetchrow_result
+
 
 class _FakeDatabase:
-    def __init__(self, rows):
-        self.connection = _FakeConnection(rows)
+    def __init__(self, rows, *, fetchrow_result=None):
+        self.connection = _FakeConnection(rows, fetchrow_result=fetchrow_result)
 
     @asynccontextmanager
     async def acquire(self):
@@ -67,8 +73,11 @@ def test_query_scopes_and_filters_counted_sends():
     assert "discord_post_status = 'posted'" in query
     assert "is_private = false" in query
     assert "is_test_send IS NOT TRUE" in query
-    # Case-insensitive match on sub_name and newest-first ordering.
+    # Case-insensitive match on sub_name (sender) OR the Dom/me's throne_handle
+    # (recipient), and newest-first ordering.
     assert "lower(s.sub_name) = lower($2)" in query
+    assert "lower(d2.throne_handle) = lower($2)" in query
+    assert "s.domme_id IN (" in query
     assert "ORDER BY s.sent_at DESC, s.id DESC" in query
 
     assert len(result) == 1
@@ -76,6 +85,28 @@ def test_query_scopes_and_filters_counted_sends():
     assert result[0].public_send_id == "ROB-000003-ABCD1234"
     assert result[0].domme_display_name == "Miss X"
     assert result[0].sub_name == "Someone"
+
+
+def test_domme_label_for_username_returns_label_when_found():
+    db = _FakeDatabase([], fetchrow_result={"label": "Miss X"})
+    repo = PublicSendsRepository(db)
+    label = asyncio.run(
+        repo.domme_label_for_username(guild_id=1485460387355820034, username="missx")
+    )
+    assert label == "Miss X"
+    query, params = db.connection.fetchrow_calls[0]
+    assert params == (1485460387355820034, "missx")
+    assert "FROM dommes" in query
+    assert "lower(d.throne_handle) = lower($2)" in query
+
+
+def test_domme_label_for_username_returns_none_when_not_a_domme():
+    db = _FakeDatabase([], fetchrow_result=None)
+    repo = PublicSendsRepository(db)
+    label = asyncio.run(
+        repo.domme_label_for_username(guild_id=1485460387355820034, username="some_sub")
+    )
+    assert label is None
 
 
 def test_no_matches_returns_empty_list():

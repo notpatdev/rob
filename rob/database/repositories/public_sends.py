@@ -59,6 +59,21 @@ DOMME_LABEL_SQL = (
     "'Registered Dom/me')"
 )
 
+# A username matches either the sub who *sent* (``sub_name``) or the Dom/me who
+# *received* (their ``throne_handle``). Throne usernames are globally unique, so
+# a name resolves to one person even across the two roles — a Dom/me who also
+# sends sees both. This is what lets Dom/mes (recipients) pull their data, not
+# just subs (senders).
+_USERNAME_MATCH_SQL = """(
+        lower(s.sub_name) = lower($2)
+        OR s.domme_id IN (
+            SELECT d2.id
+            FROM dommes d2
+            WHERE d2.guild_id = $1
+              AND lower(d2.throne_handle) = lower($2)
+        )
+    )"""
+
 # ``domme_user_id`` and the raw send id are selected only to reconstruct a
 # stable ``public_send_id`` for the rare legacy row where the column is still
 # NULL. They are used to derive the public id and are never serialized out.
@@ -81,8 +96,19 @@ _COUNTED_SENDS_SQL = f"""
     LEFT JOIN dommes d ON d.id = s.domme_id AND d.guild_id = s.guild_id
     WHERE s.guild_id = $1
       AND {COUNTED_SEND_FILTER_SQL}
-      AND lower(s.sub_name) = lower($2)
+      AND {_USERNAME_MATCH_SQL}
     ORDER BY s.sent_at DESC, s.id DESC
+"""
+
+# Resolve the Dom/me's public label for ``resolved_display_name`` when the query
+# matched a recipient rather than a sender.
+_DOMME_LABEL_FOR_USERNAME_SQL = f"""
+    SELECT {DOMME_LABEL_SQL} AS label
+    FROM dommes d
+    WHERE d.guild_id = $1
+      AND lower(d.throne_handle) = lower($2)
+    ORDER BY d.id
+    LIMIT 1
 """
 
 
@@ -121,9 +147,10 @@ class PublicSendsRepository:
         guild_id: int,
         username: str,
     ) -> list[PublicSendRow]:
-        """Every counted send whose ``sub_name`` matches ``username`` (ci).
+        """Every counted send for ``username`` (ci), newest first.
 
-        Returned newest first. Empty list when nothing matches.
+        Matches the sub who sent (``sub_name``) or the Dom/me who received
+        (``dommes.throne_handle``). Empty list when nothing matches.
         """
 
         async with self.database.acquire() as connection:
@@ -140,3 +167,19 @@ class PublicSendsRepository:
             )
             for row in rows
         ]
+
+    async def domme_label_for_username(
+        self,
+        *,
+        guild_id: int,
+        username: str,
+    ) -> str | None:
+        """The Dom/me's public label when ``username`` is a registered Dom/me
+        handle, else None. Used to set ``resolved_display_name`` for recipients
+        (whose ``sub_name`` on each row is the *sender*, not them)."""
+
+        async with self.database.acquire() as connection:
+            row = await connection.fetchrow(
+                _DOMME_LABEL_FOR_USERNAME_SQL, guild_id, username
+            )
+        return str(row["label"]) if row is not None else None

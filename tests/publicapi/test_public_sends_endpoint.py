@@ -45,13 +45,19 @@ def _rows() -> list[PublicSendRow]:
 
 
 class _StubRepo:
-    def __init__(self, rows):
+    def __init__(self, rows, *, domme_label=None):
         self._rows = rows
+        self._domme_label = domme_label
         self.calls: list[dict] = []
+        self.label_calls: list[dict] = []
 
     async def counted_sends_for_username(self, *, guild_id: int, username: str):
         self.calls.append({"guild_id": guild_id, "username": username})
         return list(self._rows)
+
+    async def domme_label_for_username(self, *, guild_id: int, username: str):
+        self.label_calls.append({"guild_id": guild_id, "username": username})
+        return self._domme_label
 
 
 class _FakeDatabase:
@@ -59,10 +65,10 @@ class _FakeDatabase:
         return True
 
 
-def _make_client(rows) -> tuple[TestServer, _StubRepo]:
+def _make_client(rows, *, domme_label=None) -> tuple[TestServer, _StubRepo]:
     settings = SimpleNamespace(public_api_allowed_origin=ALLOWED_ORIGIN)
     app = create_public_api_app(settings=settings, database=_FakeDatabase())
-    repo = _StubRepo(rows)
+    repo = _StubRepo(rows, domme_label=domme_label)
     app["public_sends_repository"] = repo
     return TestServer(app), repo
 
@@ -89,6 +95,33 @@ async def test_happy_path_returns_payload_and_cors():
     row = body["all_sends"][0]
     assert row["public_send_id"] == "ROB-000003-ABCD1234"
     assert row["sent_at"] == "2026-07-10T00:00:00Z"
+
+
+async def test_domme_username_resolves_display_name_from_domme_label():
+    # A Dom/me (recipient): each row's sub_name is the *sender*, so the
+    # resolved display name must come from the Dom/me label, not sub_name.
+    rows = [
+        PublicSendRow(
+            public_send_id="ROB-000009-DDDD9999",
+            sent_at=datetime(2026, 7, 11, tzinfo=timezone.utc),
+            amount_cents=9000,
+            currency="USD",
+            domme_display_name="Miss X",
+            item_name="Tribute",
+            sub_name="a_generous_sub",
+        )
+    ]
+    server, repo = _make_client(rows, domme_label="Miss X")
+    async with TestClient(server) as client:
+        resp = await client.get("/public/sends", params={"username": "missx"})
+        assert resp.status == 200
+        body = await resp.json()
+
+    assert body["resolved_display_name"] == "Miss X"
+    assert body["username"] == "missx"
+    assert body["all_sends"][0]["sub_name"] == "a_generous_sub"
+    # The domme label lookup was made with the main-guild scope.
+    assert repo.label_calls == [{"guild_id": MAIN_GUILD_ID, "username": "missx"}]
 
 
 async def test_send_rows_never_leak_discord_ids():

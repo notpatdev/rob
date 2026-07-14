@@ -254,6 +254,11 @@ verify_service() {
     200) log "Read query path OK (a real send happened to match the smoke username)." ;;
     *) warn "Unexpected HTTP ${code} from /public/sends. The SELECT may be failing — check db/grants/prod_rob_public.sql and journalctl -u ${SERVICE_NAME}." ;;
   esac
+
+  # guild-summary always returns 200; a 500 here means the dommes/subs grants
+  # are missing.
+  code="$(curl -s -o /dev/null -w '%{http_code}' "${base}/public/guild-summary" || true)"
+  [[ "${code}" == "200" ]] || warn "Unexpected HTTP ${code} from /public/guild-summary. Check the sends/dommes/subs SELECT grants."
 }
 
 maybe_enable_and_start() {

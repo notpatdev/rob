@@ -9,6 +9,7 @@ from rob.database.repositories.guild_settings import GuildSettingsRepository
 from rob.database.repositories.inactive_users import InactiveUsersRepository
 from rob.database.repositories.leaderboards import LeaderboardsRepository
 from rob.database.repositories.public_sends import PublicSendsRepository
+from rob.database.repositories.public_summary import PublicSummaryRepository
 from rob.database.repositories.send_change_requests import SendChangeRequestsRepository
 from rob.database.repositories.sends import SendsRepository
 from rob.database.repositories.server_backups import ServerBackupsRepository
@@ -29,6 +30,7 @@ __all__ = [
     "InactiveUsersRepository",
     "LeaderboardsRepository",
     "PublicSendsRepository",
+    "PublicSummaryRepository",
     "SendChangeRequestsRepository",
     "SendsRepository",
     "ServerBackupsRepository",

@@ -20,6 +20,16 @@
 
 - `/test achievements` (requires owner/mod/manage-guild permissions)
 
+## Owner commands
+
+- `/shutdown` (owner-only; main + test guilds; requires Manage Server to see it)
+  — DMs Rob's farewell/shutdown announcement. The announcement carries three
+  link buttons: **FinBot** (https://www.thefinbot.xyz/), **Grab your data**
+  (https://www.robthebot.com/sends/), and **Pigeon** (https://pigeonbot.xyz).
+  Recipients are currently limited to the bot owner only for testing — see
+  `ANNOUNCEMENT_RECIPIENT_USER_IDS` in `rob/discord/cogs/shutdown.py` to widen
+  the audience before going live.
+
 ## Inactivity commands
 
 - `/inactivitytest`

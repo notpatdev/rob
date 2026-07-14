@@ -4,11 +4,11 @@ This page is a practical checklist for day-to-day Rob operations in production/d
 
 ## Canonical Repo
 
-The canonical Rob repo is now `patdadev/rob`. Treat older rehearsal/bootstrap repo references as legacy history, not the active source of truth, and not as a merge from the old `notpatdev/robthebot` repo.
+The canonical Rob repo is now `foolishbuilder/rob`. Treat older rehearsal/bootstrap repo references as legacy history, not the active source of truth, and not as a merge from the old `notpatdev/robthebot` repo.
 
 Recommended baseline:
 
-1. Clone from `https://github.com/patdadev/rob.git`.
+1. Clone from `https://github.com/foolishbuilder/rob.git`.
 2. Copy GitHub Actions secrets, environments, and protection rules into the active repo if GitHub has been rebuilt.
 3. Verify the workflow wiring in the active repo before touching production.
 4. Rehearse data import and webhook reissue on `rob_dev_v2` when doing migration work.

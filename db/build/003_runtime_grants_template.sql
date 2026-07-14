@@ -119,3 +119,23 @@ REVOKE DELETE ON TABLE bot_users FROM prod_rob_webhook;
 
 -- If webhook code needs more access, add the smallest specific grant required.
 -- Do not grant CREATE, ALTER, DROP, or TRUNCATE to runtime users.
+
+-- ---------------------------------------------------------------------------
+-- Production: prod_rob_public on rob_prod (SELECT-only public API role)
+-- ---------------------------------------------------------------------------
+-- Backs api.robthebot.com / GET /public/sends. See db/grants/prod_rob_public.sql.
+\connect rob_prod
+
+GRANT CONNECT ON DATABASE rob_prod TO prod_rob_public;
+GRANT USAGE ON SCHEMA public TO prod_rob_public;
+
+GRANT SELECT ON
+  sends,
+  dommes
+TO prod_rob_public;
+
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON sends FROM prod_rob_public;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON dommes FROM prod_rob_public;
+REVOKE CREATE ON SCHEMA public FROM prod_rob_public;
+
+-- SELECT-only: never grant writes, DDL, or sequence privileges to this role.

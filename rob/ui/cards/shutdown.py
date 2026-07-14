@@ -1,9 +1,12 @@
 """Components V2 cards for Rob's shutdown announcement (``/shutdown``).
 
 The announcement is a farewell DM sent to Rob users. Three stateless link
-buttons point at FinBot, the "grab your data" page, and the new Pigeon site.
-Link buttons carry no ``custom_id`` and need no callback or persistent-view
-registration, so this card can be built fresh per recipient and sent as-is.
+buttons point at FinBot, the Rob website, and the new Pigeon site. Link buttons
+carry no ``custom_id`` and need no callback or persistent-view registration, so
+this card can be built fresh per recipient and sent as-is.
+
+The announcement container has no accent colour — a plain card reads calmer for
+a goodbye; large separators give each section room to breathe.
 """
 
 from __future__ import annotations
@@ -15,45 +18,63 @@ from rob.ui.theme import COLOR_INFO, COLOR_SUCCESS
 
 # Destinations for the three link buttons on the announcement.
 FINBOT_URL = "https://www.thefinbot.xyz/"
-GRAB_DATA_URL = "https://www.robthebot.com/"
+ROB_WEBSITE_URL = "https://www.robthebot.com/"
 PIGEON_URL = "https://pigeonbot.xyz"
 
-_TITLE = "# Goodbye, for now..."
+_TITLE = "## Rob is saying Goodbye, for now..."
 
-# Each entry is one paragraph/list block; joined with blank lines so paragraphs
-# read with clear spacing while the numbered list stays tight.
-_BODY = "\n\n".join(
+# Intro paragraphs, joined with blank lines for clear spacing.
+_INTRO = "\n\n".join(
     (
         "Hello!",
-        "After an awesome nearly 3 months of Rob being active, tracking sends, "
-        "tracking the count and so on, Rob will now be shutting down.",
-        "I am shutting Rob down for now as my mental health is deteriorating and "
-        "I'm needing to take a break from everything for a bit. I will in the "
-        "background be planning the new bot **Pigeon** and will start work on it "
-        "in roughly a month depending on how I am going.",
-        "This wasn't an easy decision to make as I know how you guys find Rob "
-        "really handy for tracking sends.",
-        "To make this easier, I have some links in the buttons below.",
-        "1. **FinBot** - It's a well known Findom Bot that allows you to manually "
-        "track sends.",
-        "2. **Download your Data** - To help you quickly get your sends onto "
-        "FinBot if you choose to use it. You can download a record of all your "
-        "sends including the total amount you received and who they were from, "
-        "this will be available to all Dom/mes and Subs (where possible). To grab "
-        "your data, simply click the button below and enter your Throne username.",
-        "3. **Pigeon** - A link to the new Pigeon website (still under "
-        "construction but it will be where I make announcements around the new "
-        "bot).",
-        "Thank you for helping to make Rob into the bot he is today.",
+        "After nearly 3 awesome months of Rob being active, tracking sends, "
+        "counting the count and tracking inactivity peeps, I have to announce "
+        "that I will now be taking Rob offline.",
+        "He has become an important part of VIB, helping Dom/me's and Subs track "
+        "their sends in a fast and efficient fashion. And while I don't want to "
+        "disable Rob, I feel I have to as I have been facing a big decline in my "
+        "mental health over the last few weeks.",
+        "The timeline of events are as follows:",
     )
 )
 
-_FOOTER = (
-    "-# Rob's main features will shutdown on the 15th of July at 8am (AEST) and "
-    "his send tracking systems will continue to run until the 18th of July at "
-    "8am (AEST). You will be able to obtain a copy of your sends from the website "
-    "until the end of the month, 2nd of August at 8am (AEST), where the Rob "
-    "website will then display his final stats until I decide to shut it down."
+# Dated timeline. Date labels are bolded so each step stands out.
+_TIMELINE = "\n\n".join(
+    (
+        "**Now:** This announcement, as well as the ability to visit the Rob "
+        "website and download a record of all of your sends (for both Dom/me's "
+        "and Subs).",
+        "**16th of July at 8am (AEST):** Rob's core features such as Send "
+        "Tracking, Send Leaderboard, Count Tracking, inactivity, etc. will be "
+        "turned off. Rob's backend will continue to track any sends made on "
+        "Throne during this period and manual send addition will continue to "
+        "work.",
+        "**20th of July at 8am (AEST):** Rob will cease to track sends and all "
+        "webhook URL's provided to Dom/me's will be made invalid.",
+        "**1st of August at 8am (AEST):** Any further systems still active on Rob "
+        "will be turned off and Rob will officially go offline. This will also "
+        "become the final day to view or download a copy of any and all sends "
+        "tracked for you by Rob. After that, for your privacy, all individual "
+        "send data will be permanently anonymised — the Rob website will then "
+        "display only the final total amounts and allow you all to download a "
+        "copy of the final server-totalled data.",
+    )
+)
+
+# Closing paragraphs.
+_CLOSING = "\n\n".join(
+    (
+        "Allowing you to pull your own send data means you can, if you wish, use "
+        "FinBot — which has been around longer than Rob — to manually track your "
+        "sends.",
+        "Below are 3 links: 1. the link to FinBot (should you wish to use it), "
+        "2. the link to the Rob website, 3. the link to the new Pigeon bot "
+        "website.",
+        "I will take time off Discord and check in every now and then, and in a "
+        "month's time I will begin planning to build the Pigeon bot, with a hope "
+        "to have it online by the end of the year.",
+        "Thank you for being part of Rob.",
+    )
 )
 
 
@@ -61,24 +82,33 @@ def _link_button(label: str, url: str) -> discord.ui.Button:
     return discord.ui.Button(style=discord.ButtonStyle.link, label=label, url=url)
 
 
+def _section_break() -> discord.ui.Separator:
+    return discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+
+
 class ShutdownAnnouncementView(discord.ui.LayoutView):
-    """The farewell card: heading, body, small-print timing note, link buttons."""
+    """The farewell card: heading, intro, timeline, closing, link buttons.
+
+    No accent colour; large separators between each section.
+    """
 
     def __init__(self) -> None:
         # Link buttons are stateless, so the view never needs to time out or
         # re-bind; timeout=None keeps the buttons alive indefinitely.
         super().__init__(timeout=None)
-        container = discord.ui.Container(accent_color=COLOR_INFO)
+        container = discord.ui.Container()  # no accent_color: plain card
         container.add_item(discord.ui.TextDisplay(_TITLE))
-        container.add_item(discord.ui.Separator())
-        container.add_item(discord.ui.TextDisplay(_BODY))
-        container.add_item(discord.ui.Separator())
-        container.add_item(discord.ui.TextDisplay(_FOOTER))
-        container.add_item(discord.ui.Separator())
+        container.add_item(_section_break())
+        container.add_item(discord.ui.TextDisplay(_INTRO))
+        container.add_item(_section_break())
+        container.add_item(discord.ui.TextDisplay(_TIMELINE))
+        container.add_item(_section_break())
+        container.add_item(discord.ui.TextDisplay(_CLOSING))
+        container.add_item(_section_break())
         container.add_item(
             discord.ui.ActionRow(
                 _link_button("FinBot", FINBOT_URL),
-                _link_button("Grab your data", GRAB_DATA_URL),
+                _link_button("Rob Website", ROB_WEBSITE_URL),
                 _link_button("Pigeon", PIGEON_URL),
             )
         )

@@ -41,15 +41,23 @@ class PublicSendRow:
     sub_name: str | None
 
 
+# Shared by both public endpoints. A "counted send" is posted, not private, and
+# not a test send. Interpolated as a WHERE fragment on alias ``s``.
+COUNTED_SEND_FILTER_SQL = (
+    "s.discord_post_status = 'posted' "
+    "AND s.is_private = false "
+    "AND s.is_test_send IS NOT TRUE"
+)
+
 # The domme label mirrors the leaderboard precedence: curated public name, then
 # the public Throne handle, then a generic fallback. Never the Discord id.
-_DOMME_LABEL_SQL = """
-    COALESCE(
-        NULLIF(TRIM(d.public_display_name), ''),
-        NULLIF(TRIM(d.throne_handle), ''),
-        'A Dom/me'
-    )
-"""
+# Expects alias ``d`` (LEFT JOIN dommes d ON d.id = s.domme_id AND ...).
+DOMME_LABEL_SQL = (
+    "COALESCE("
+    "NULLIF(TRIM(d.public_display_name), ''), "
+    "NULLIF(TRIM(d.throne_handle), ''), "
+    "'Registered Dom/me')"
+)
 
 # ``domme_user_id`` and the raw send id are selected only to reconstruct a
 # stable ``public_send_id`` for the rare legacy row where the column is still
@@ -68,13 +76,11 @@ _COUNTED_SENDS_SQL = f"""
         s.currency AS currency,
         s.item_name AS item_name,
         s.sub_name AS sub_name,
-        {_DOMME_LABEL_SQL} AS domme_display_name
+        {DOMME_LABEL_SQL} AS domme_display_name
     FROM sends s
-    LEFT JOIN dommes d ON d.id = s.domme_id
+    LEFT JOIN dommes d ON d.id = s.domme_id AND d.guild_id = s.guild_id
     WHERE s.guild_id = $1
-      AND s.discord_post_status = 'posted'
-      AND s.is_private = false
-      AND s.is_test_send IS NOT TRUE
+      AND {COUNTED_SEND_FILTER_SQL}
       AND lower(s.sub_name) = lower($2)
     ORDER BY s.sent_at DESC, s.id DESC
 """

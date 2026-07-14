@@ -20,12 +20,12 @@ Response shape (all 64-bit ids serialized as strings; no Discord ids):
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from aiohttp import web
 
 from rob.config.guilds import MAIN_GUILD_ID
 from rob.database.repositories.public_sends import PublicSendRow, PublicSendsRepository
+from rob.publicapi.serialization import iso_z
 
 log = logging.getLogger(__name__)
 
@@ -35,17 +35,10 @@ PUBLIC_GUILD_ID = MAIN_GUILD_ID
 _RECENT_LIMIT = 5
 
 
-def _iso_z(value: datetime) -> str:
-    """ISO 8601 in UTC with a trailing ``Z`` (e.g. ``2026-07-10T00:00:00Z``)."""
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
 def _send_row(row: PublicSendRow) -> dict:
     return {
         "public_send_id": str(row.public_send_id),
-        "sent_at": _iso_z(row.sent_at),
+        "sent_at": iso_z(row.sent_at),
         "amount_cents": int(row.amount_cents),
         "currency": row.currency,
         "domme_display_name": row.domme_display_name,
@@ -77,7 +70,7 @@ def build_sends_payload(username: str, rows: list[PublicSendRow]) -> dict:
         # The stored casing of the most recent matching send is the friendliest
         # display name we have without touching any Discord identity.
         "resolved_display_name": newest.sub_name or username,
-        "last_updated": _iso_z(newest.sent_at),
+        "last_updated": iso_z(newest.sent_at),
         "total_count": len(rows),
         "totals": _totals(rows),
         "recent": [_send_row(row) for row in rows[:_RECENT_LIMIT]],

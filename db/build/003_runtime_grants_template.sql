@@ -131,11 +131,13 @@ GRANT USAGE ON SCHEMA public TO prod_rob_public;
 
 GRANT SELECT ON
   sends,
-  dommes
+  dommes,
+  subs
 TO prod_rob_public;
 
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON sends FROM prod_rob_public;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON dommes FROM prod_rob_public;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON subs FROM prod_rob_public;
 REVOKE CREATE ON SCHEMA public FROM prod_rob_public;
 
 -- SELECT-only: never grant writes, DDL, or sequence privileges to this role.

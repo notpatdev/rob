@@ -27,56 +27,52 @@ _TITLE = "## Rob is saying Goodbye, for now..."
 _INTRO = "\n\n".join(
     (
         "Hello!",
-        "After nearly 3 awesome months of Rob being active, tracking sends, "
-        "counting the count and tracking inactivity peeps, I have to announce "
-        "that I will now be taking Rob offline.",
-        "He has become an important part of VIB, helping Dom/me's and Subs track "
-        "their sends in a fast and efficient fashion. And while I don't want to "
-        "disable Rob, I feel I have to as I have been facing a big decline in my "
-        "mental health over the last few weeks.",
-        "The timeline of events are as follows:",
+        "Rob has been active for nearly 3 months now, tracking sends, keeping "
+        "the Count and keeping an eye on inactive members. In that time he's "
+        "become a real fixture in VIB, helping Dom/me's and Subs stay on top of "
+        "their sends quickly and reliably.",
+        "Which makes this a hard one to write: I've decided to take Rob offline. "
+        "My mental health has taken a real hit over the last few weeks, and "
+        "stepping back from running Rob is part of what I need to do to look "
+        "after it. It isn't a decision I wanted to make, but it's the right one "
+        "for me right now.",
+        "Here's how the wind-down will work:",
     )
 )
-
 # Dated timeline. Date labels are bolded so each step stands out.
 _TIMELINE = "\n\n".join(
     (
-        "**Now:** This announcement, as well as the ability to visit the Rob "
-        "website and download a record of all of your sends (for both Dom/me's "
-        "and Subs).",
-        "**16th of July at 8am (AEST):** Rob's core features such as Send "
-        "Tracking, Send Leaderboard and inactivity will be "
-        "turned off. Rob's backend will continue to track any sends made on "
-        "Throne during this period and manual send addition will continue to "
-        "work. The count will continue to be tracked.",
-        "**20th of July at 8am (AEST):** Rob will cease to track sends and all "
-        "webhook URL's provided to Dom/me's will be made invalid.",
-        "**1st of August at 8am (AEST):** Any further systems still active on Rob "
-        "will be turned off and Rob will officially go offline. This will also "
-        "become the final day to view or download a copy of any and all sends "
-        "tracked for you by Rob. After that, for your privacy, all individual "
-        "send data will be permanently anonymised — the Rob website will then "
-        "display only the final total amounts and allow you all to download a "
-        "copy of the final server-totalled data.",
+        "**Now:** This announcement goes out, and the Rob website opens up so you "
+        "can download a full record of your sends (for both Dom/me's and Subs).",
+        "**16th of July, 8am (AEST):** Rob's core features (Send Tracking, the "
+        "Send Leaderboard and inactivity tracking) switch off. Behind the scenes "
+        "he'll keep logging any sends made on Throne, manual send addition still "
+        "works, and the Count keeps ticking over.",
+        "**20th of July, 8am (AEST):** Rob stops tracking sends entirely, and "
+        "every webhook URL handed out to Dom/me's is retired.",
+        "**1st of August, 8am (AEST):** Everything still running on Rob shuts "
+        "down and he officially goes offline. This is your last day to view or "
+        "download a copy of everything Rob has tracked for you. After that, all "
+        "individual send data is permanently anonymised for your privacy, and "
+        "the website will show only the final totals, with the server-totalled "
+        "data still available to download.",
     )
 )
-
 # Closing paragraphs.
 _CLOSING = "\n\n".join(
     (
-        "Allowing you to pull your own send data means you can, if you wish, use "
-        "FinBot, which has been around longer than Rob,to manually track your "
-        "sends.",
-        "Below are 3 links: 1. the link to FinBot (should you wish to use it), "
-        "2. the link to the Rob website, 3. the link to the new Pigeon bot "
-        "website. (Work in Progress)",
-        "My activity on Discord will also be small as I plan out and prepare mentally"
-        " to build Pigeon in a months time with hopes to have it active"
-        " by the end of the year.",
+        "If you'd like to keep tracking your sends by hand from here, you can "
+        "pull your data out of Rob and carry it over to FinBot, which has been "
+        "around even longer than Rob.",
+        "You'll find 3 links below: 1. FinBot, if you'd like to use it, 2. the "
+        "Rob website, and 3. the new Pigeon bot website (still a work in "
+        "progress).",
+        "I'll be keeping a low profile on Discord for a while as I plan things "
+        "out and get myself into the right headspace to build Pigeon. I'm hoping "
+        "to start in a month or so and have it live by the end of the year.",
         "Thank you for being part of Rob.",
     )
 )
-
 
 def _link_button(label: str, url: str) -> discord.ui.Button:
     return discord.ui.Button(style=discord.ButtonStyle.link, label=label, url=url)

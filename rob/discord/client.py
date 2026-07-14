@@ -273,13 +273,38 @@ class RobBot(commands.Bot):
         return await self._global_interaction_check(interaction)
 
     async def _sync_application_commands(self) -> None:
-        """Sync commands to the main and test guilds, then DM-capable commands globally."""
+        """Sync commands to the main and test guilds, then DM-capable commands globally.
+
+        A guild sync can fail with 403 Missing Access (error code 50001) when Rob
+        was invited to that guild without the ``applications.commands`` scope, or
+        is no longer a member. That must never crash startup: log it and carry on
+        so the other guild and the global commands still sync.
+        """
         for guild_id in (MAIN_GUILD_ID, TEST_GUILD_ID):
             guild = discord.Object(id=guild_id)
-            synced_guild = await self.tree.sync(guild=guild)
+            try:
+                synced_guild = await self.tree.sync(guild=guild)
+            except discord.Forbidden:
+                log.error(
+                    "Skipping command sync for guild %s: missing access (50001). "
+                    "Re-invite Rob with the applications.commands scope, or confirm "
+                    "it is still a member of that guild.",
+                    guild_id,
+                )
+                continue
+            except discord.HTTPException:
+                log.exception(
+                    "Command sync failed for guild %s; continuing with remaining syncs.",
+                    guild_id,
+                )
+                continue
             log.info("Synced %s command(s) to guild %s.", len(synced_guild), guild_id)
 
-        synced = await self.tree.sync()
+        try:
+            synced = await self.tree.sync()
+        except discord.HTTPException:
+            log.exception("Global command sync failed.")
+            return
         log.info("Synced %s global command(s).", len(synced))
 
     async def on_ready(self) -> None:

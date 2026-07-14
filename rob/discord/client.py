@@ -37,6 +37,7 @@ from rob.discord.cogs.reports import ReportsCog
 from rob.discord.cogs.sends import SendsCog
 from rob.discord.cogs.server_backup import ServerBackupCog
 from rob.discord.cogs.settings import SettingsCog
+from rob.discord.cogs.shutdown import ShutdownCog
 from rob.discord.cogs.voice_transcription import VoiceTranscriptionCog
 from rob.discord.cogs.warn_relay import WarnRelayCog
 from rob.services.counting_service import CountingService
@@ -214,6 +215,7 @@ class RobBot(commands.Bot):
         await self.add_cog(WarnRelayCog(self))
         await self.add_cog(AdminToolsCog(self))
         await self.add_cog(SettingsCog(self))
+        await self.add_cog(ShutdownCog(self))
         await self.add_cog(DataPrivacyCog(self))
         await self.add_cog(ActivityTrackerCog(self))
         await self.add_cog(InactivityCog(self))

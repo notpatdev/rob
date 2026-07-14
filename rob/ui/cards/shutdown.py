@@ -27,50 +27,61 @@ _TITLE = "## Good afternoon, good evening & goodnight..."
 _INTRO = "\n\n".join(
     (
         "Hello!",
-        "Rob has been active for nearly 3 months now, tracking sends, keeping "
-        "the Count and keeping an eye on inactive members. In that time he's "
-        "become a real fixture in VIB, helping Dom/me's and Subs stay on top of "
-        "their sends quickly and reliably.",
-        "Which makes this a hard one to write: I've decided to take Rob offline. "
-        "My mental health has taken a real hit over the last few weeks, and "
-        "stepping back from running Rob is part of what I need to do to look "
-        "after it. It isn't a decision I wanted to make, but it's the right one "
-        "for me right now.",
-        "Here's how the wind-down will work:",
+        "Over the last 3 awesome months, Rob has been there tracking your sends, "
+        "keeping an eye on the count and making sure inactive members were dealt "
+        "with. He has essentially become a crucial part of everyone's findom fun "
+        "making sure you're aware of sends long before Throne even made you aware "
+        "of it.",
+        "However, today… I announce that Rob's services will soon be coming to an "
+        "end. This was not a decision that was easy to make given the reliance on "
+        "Rob, however given my mental health has been taking a real hit over the "
+        "last few weeks, I feel it's better to step away from Rob and socials for "
+        "a bit and focus on myself. This won't be immediate, far from it. But over "
+        "the last few weeks I've been attempting to build something to help give "
+        "you a keepsake of Rob and help with moving your sends to other bots once "
+        "he goes offline.",
+        "Here's how the shutdown will work:",
     )
 )
 # Dated timeline. Date labels are bolded so each step stands out.
 _TIMELINE = "\n\n".join(
     (
-        "**Now:** This announcement goes out, and the Rob website opens up so you "
-        "can download a full record of your sends (for both Dom/me's and Subs).",
-        "**16th of July, 8am (AEST):** Rob's core features (Send Tracking, the "
-        "Send Leaderboard and inactivity tracking) switch off. Behind the scenes "
-        "he'll keep logging any sends made on Throne, manual send addition still "
-        "works, and the Count keeps ticking over.",
-        "**20th of July, 8am (AEST):** Rob stops tracking sends entirely, and "
-        "every webhook URL handed out to Dom/me's is retired.",
-        "**1st of August, 8am (AEST):** Everything still running on Rob shuts "
-        "down and he officially goes offline. This is your last day to view or "
-        "download a copy of everything Rob has tracked for you. After that, all "
-        "individual send data is permanently anonymised for your privacy, and "
-        "the website will show only the final totals, with the server-totalled "
-        "data still available to download.",
+        "**Right Now:** Nothing, Rob will still continue to run as he has. Rob's "
+        "website becomes available for those to view or download send stats.",
+        "**16th of July at 8am (AEST):** Some of Rob's core features will be "
+        "turned off. These include the send leaderboard and send tracking, the "
+        "inactivity system, Rob's warn notification system, etc. Note: Rob will "
+        "still continue to track sends made on Throne in the background as well "
+        "as Dom/me's will still be able to manually add sends to Rob. And the "
+        "count will still continue to run.",
+        "**20th of July at 8am (AEST):** Rob's send tracking system will be "
+        "completely turned off. Manual sends will no longer be able to be added "
+        "and all URLs provided by Rob will be invalidated. This will leave the "
+        "count as the only system running.",
+        "**1st of August at 8am (AEST):** Rob will finally come to an end. All "
+        "users of Rob or anyone with any send data on Rob will receive one final "
+        "thank you message along with a PDF (I know, so professional) detailing "
+        "all of your sends Rob tracked.\n\nRob will also send his final send "
+        "stats to the leaderboard channel outlining all of the stats for VIB as "
+        "a whole.",
     )
 )
 # Closing paragraphs.
 _CLOSING = "\n\n".join(
     (
-        "If you'd like to keep tracking your sends by hand from here, you can "
-        "pull your data out of Rob and carry it over to FinBot, which has been "
-        "around even longer than Rob.",
-        "You'll find 3 links below: 1. FinBot, if you'd like to use it, 2. the "
-        "Rob website, and 3. the new Pigeon bot website (still a work in "
-        "progress).",
-        "I'll be keeping a low profile on Discord for a while as I plan things "
-        "out and get myself into the right headspace to build Pigeon. I'm hoping "
-        "to start in a month or so and have it live by the end of the year.",
+        "As of the 1st of August, once all final messages are sent, the Rob "
+        "website will no longer allow you to retrieve or view your own send "
+        "stats, instead displaying one simple page showing all of VIB's stats "
+        "and some hidden Rob stats that should give you a good laugh. This day "
+        "will also mark the day all send data is anonymised for privacy.",
+        "Below are a few links which may serve some use. A link to FinBot, the "
+        "inspiration to Rob. A link to the Rob website and a link to the new "
+        "Pigeon bot which I hope to start planning and building in a month or "
+        "so's time.",
+        "Over the next few months, I'll be keeping fairly quiet on socials while "
+        "I build the mental capacity to come back and build Pigeon.",
         "Thank you for being part of Rob.",
+        "Pat",
     )
 )
 

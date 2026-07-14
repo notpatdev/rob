@@ -15,7 +15,7 @@ from rob.ui.theme import COLOR_INFO, COLOR_SUCCESS
 
 # Destinations for the three link buttons on the announcement.
 FINBOT_URL = "https://www.thefinbot.xyz/"
-GRAB_DATA_URL = "https://www.robthebot.com/sends/"
+GRAB_DATA_URL = "https://www.robthebot.com/"
 PIGEON_URL = "https://pigeonbot.xyz"
 
 _TITLE = "# Goodbye, for now..."

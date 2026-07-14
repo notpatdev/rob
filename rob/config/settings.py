@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -50,6 +50,13 @@ class WebhookSettings(BaseSettings):
     throne_webhook_signature_header: str
     throne_webhook_signed_message_format: str
     throne_webhook_max_timestamp_skew_seconds: int
+
+
+@dataclass(frozen=True)
+class PublicApiSettings(BaseSettings):
+    public_api_host: str
+    public_api_port: int
+    public_api_allowed_origin: str
 
 
 @dataclass(frozen=True)
@@ -285,6 +292,24 @@ def load_bot_settings(env_file: str | Path | None = None) -> BotSettings:
         voice_transcribe_max_file_mb=_env_int("VOICE_TRANSCRIBE_MAX_FILE_MB", 25, minimum=1),
         voice_transcribe_max_concurrency=_env_int(
             "VOICE_TRANSCRIBE_MAX_CONCURRENCY", 1, minimum=1
+        ),
+    )
+
+
+def load_public_api_settings(env_file: str | Path | None = None) -> PublicApiSettings:
+    """Settings for the public read-only API service (``api.robthebot.com``).
+
+    The service reuses ``DATABASE_URL`` but the deploy env should point it at a
+    SELECT-only database role — never the webhook writer role.
+    """
+    base = load_base_settings(env_file)
+    base_kwargs = {f.name: getattr(base, f.name) for f in fields(BaseSettings)}
+    return PublicApiSettings(
+        **base_kwargs,
+        public_api_host=_env_str("PUBLIC_API_HOST", "127.0.0.1"),
+        public_api_port=_env_int("PUBLIC_API_PORT", 8090, minimum=1),
+        public_api_allowed_origin=_env_str(
+            "PUBLIC_API_ALLOWED_ORIGIN", "https://robthebot.com"
         ),
     )
 

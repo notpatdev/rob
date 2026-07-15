@@ -22,7 +22,13 @@ class _FakeUser:
 class _FakeBot:
     def __init__(self):
         self.guild_settings_repo = SimpleNamespace(get=self._get_settings)
+        self.maintenance_service = SimpleNamespace(
+            get_wind_down_phase=self._wind_down_phase
+        )
         self._user = _FakeUser(123)
+
+    async def _wind_down_phase(self) -> int:
+        return 0
 
     async def _get_settings(self, _guild_id: int):
         return SimpleNamespace(warn_log_channel_id=777, carlbot_user_id=555)

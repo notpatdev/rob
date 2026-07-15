@@ -55,6 +55,8 @@ class InactivityCog(commands.Cog):
 
     @tasks.loop(minutes=60)
     async def inactivity_loop(self) -> None:
+        if await self.bot.maintenance_service.get_wind_down_phase() >= 1:
+            return
         guild_ids = await self.bot.guild_settings_repo.list_guild_ids()
         for guild_id in guild_ids:
             if not is_new_system_guild(guild_id):

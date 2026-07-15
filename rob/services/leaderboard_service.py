@@ -69,6 +69,13 @@ class LeaderboardService:
         self._refresh_locks: dict[int, asyncio.Lock] = {}
         self._content_hashes: dict[int, str] = {}
 
+    async def _wind_down_frozen(self) -> bool:
+        # Phase 1+ freezes the Discord leaderboard (the public site stays live).
+        getter = getattr(self.maintenance, "get_wind_down_phase", None)
+        if getter is None:
+            return False
+        return await getter() >= 1
+
     async def _rob_offline_for_guild(self, guild_id: int | None) -> bool:
         checker = getattr(self.maintenance, "is_rob_offline_for_guild", None)
         if checker is None:
@@ -107,6 +114,9 @@ class LeaderboardService:
             await self.refresh_guild(guild_id)
 
     async def refresh_guild(self, guild_id: int) -> bool:
+        if await self._wind_down_frozen():
+            log.info("Leaderboard refresh skipped for guild_id=%s (wind-down).", guild_id)
+            return False
         lock = self._refresh_locks.setdefault(guild_id, asyncio.Lock())
         if lock.locked():
             log.info("Leaderboard sync skipped; another sync is already running for guild_id=%s", guild_id)

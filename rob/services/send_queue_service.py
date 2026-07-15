@@ -293,6 +293,15 @@ class SendQueueService:
         return ok
 
     async def _post_send(self, send) -> bool:
+        if await self.maintenance.get_wind_down_phase() >= 1:
+            log.info(
+                "Send id=%s guild_id=%s saved without Discord notification (wind-down).",
+                send.id,
+                send.guild_id,
+            )
+            await self.sends.mark_posted(send.id, message_id=None)
+            return True
+
         if await self._send_tracking_disabled_for_guild(send.guild_id):
             log.info(
                 "Send id=%s guild_id=%s saved without Discord notification while Rob is offline.",

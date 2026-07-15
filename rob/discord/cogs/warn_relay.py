@@ -65,6 +65,8 @@ class WarnRelayCog(commands.Cog):
     async def _process_carlbot_warn_message(self, message: discord.Message) -> None:
         if message.guild is None:
             return
+        if await self.bot.maintenance_service.get_wind_down_phase() >= 1:
+            return
         settings = await self.bot.guild_settings_repo.get(message.guild.id)
         if settings is None:
             return

@@ -137,6 +137,12 @@ class RegistrationCog(commands.Cog):
         maintenance = getattr(self.bot, "maintenance_service", None)
         if maintenance is None:
             return False
+        # Wind-down phase 1+ closes new registrations.
+        phase_getter = getattr(maintenance, "get_wind_down_phase", None)
+        if phase_getter is not None:
+            phase_result = phase_getter()
+            if inspect.isawaitable(phase_result) and int(await phase_result) >= 1:
+                return True
         checker = getattr(maintenance, "registrations_blocked_for_guild", None)
         if checker is not None:
             result = checker(guild_id)

@@ -92,7 +92,7 @@ def _build_test_app(
     monkeypatch.setattr(
         webhooks_mod,
         "MaintenanceService",
-        lambda _repo: SimpleNamespace(),
+        lambda _repo: SimpleNamespace(get_wind_down_phase=AsyncMock(return_value=0)),
     )
     monkeypatch.setattr(
         webhooks_mod,

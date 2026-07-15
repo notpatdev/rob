@@ -89,6 +89,11 @@ async def handle_throne_webhook(request: web.Request) -> web.Response:
             status=403,
         )
 
+    # Wind-down phase 2+: stop recording Throne sends entirely. Ack with 200 so
+    # Throne stops retrying. This is what functionally invalidates the URLs.
+    if await MaintenanceService(BotStateRepository(database)).get_wind_down_phase() >= 2:
+        return web.json_response({"ok": True, "ignored": True, "reason": "wind_down"})
+
     parsed = parse_throne_send_payload(creator_id=creator_id, payload=payload)
     explicit_test = is_explicit_test_webhook_payload(payload, parsed)
     known_test_sender = is_known_test_sender(parsed.gifter_username, test_gifter_usernames=set(settings.throne_test_gifter_usernames))

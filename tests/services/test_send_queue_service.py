@@ -50,6 +50,9 @@ class _FakeMaintenance:
     async def is_enabled(self) -> bool:
         return self.enabled
 
+    async def get_wind_down_phase(self) -> int:
+        return 0
+
     async def consume_leaderboard_refresh_request(self) -> bool:
         current = self.refresh_requested
         self.refresh_requested = False

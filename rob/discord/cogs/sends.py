@@ -70,6 +70,15 @@ class SendsCog(commands.Cog):
             )
             return
 
+        if await self.bot.maintenance_service.get_wind_down_phase() >= 2:
+            await interaction.response.send_message(
+                **error_card(
+                    "Manual sends are closed — Rob is winding down."
+                ).send_kwargs(),
+                ephemeral=True,
+            )
+            return
+
         domme = await self.bot.dommes_repo.get_by_user_id(
             interaction.guild.id,
             interaction.user.id,

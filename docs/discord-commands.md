@@ -22,6 +22,8 @@
 
 ## Owner commands
 
+- `/winddown` (owner-only; main + test guilds) — view or control the scheduled
+  wind-down phase (`phase:0-3`, `auto:true|false`). See [`wind-down.md`](wind-down.md).
 - `/shutdown` (owner-only; main + test guilds; requires Manage Server to see it)
   — DMs Rob's farewell/shutdown announcement. The announcement carries three
   link buttons: **FinBot** (https://www.thefinbot.xyz/), **Grab your data**

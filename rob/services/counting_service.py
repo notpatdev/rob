@@ -15,6 +15,7 @@ from rob.database.repositories.dommes import DommesRepository
 from rob.database.repositories.guild_settings import GuildSettingsRepository
 from rob.models import CountRecoveryWindow
 from rob.database.repositories.subs import SubsRepository
+from rob.services import wind_down
 from rob.services.send_display import is_known_test_sender
 from rob.ui.cards.counting import (
     count_failed_reset_card,
@@ -216,6 +217,10 @@ class CountingService:
 
     async def process_message(self, message: discord.Message) -> CountingProcessResult | None:
         if message.guild is None or message.author.bot:
+            return None
+
+        # Wind-down phase 3: Rob is fully offline, the count stops too.
+        if self.bot_settings is not None and await wind_down.get_phase(self.bot_settings) >= 3:
             return None
 
         state = await self.get_or_create_state(message.guild.id)

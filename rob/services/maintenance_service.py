@@ -5,6 +5,7 @@ import json
 from rob.database.repositories.bot_state import BotStateRepository
 from rob.config.guilds import is_main_guild
 from rob.models import MaintenanceState
+from rob.services import wind_down
 from rob.services.leaderboard_status import LeaderboardStatus
 from rob.utils.time import utc_now
 
@@ -106,6 +107,22 @@ class MaintenanceService:
     async def disable_rob_offline(self) -> None:
         await self.bot_state.set_value(ROB_OFFLINE_MODE_KEY, "false")
         await self.request_leaderboard_refresh()
+
+    # --- Scheduled wind-down -------------------------------------------------
+
+    async def get_wind_down_phase(self) -> int:
+        return await wind_down.get_phase(self.bot_state)
+
+    async def set_wind_down_phase(self, phase: int) -> int:
+        applied = await wind_down.set_phase(self.bot_state, phase)
+        await self.request_leaderboard_refresh()
+        return applied
+
+    async def wind_down_auto_advance(self) -> bool:
+        return await wind_down.is_auto_advance_enabled(self.bot_state)
+
+    async def set_wind_down_auto_advance(self, enabled: bool) -> None:
+        await wind_down.set_auto_advance(self.bot_state, enabled)
 
     async def request_leaderboard_refresh(self) -> None:
         marker = utc_now().isoformat()

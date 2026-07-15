@@ -22,6 +22,10 @@ from discord import app_commands
 from discord.ext import commands
 
 from rob.config.guilds import BOT_OWNER_USER_IDS, MAIN_GUILD_ID, TEST_GUILD_ID
+from rob.services.recipients import (
+    resolve_messageable_recipients,
+    resolve_registered_recipient_ids,
+)
 from rob.ui.cards.errors import error_card
 from rob.ui.cards.shutdown import shutdown_announcement_card, shutdown_sent_card
 from rob.ui.theme import COLOR_NEUTRAL, COLOR_WARNING
@@ -99,41 +103,16 @@ class ShutdownCog(commands.Cog):
     async def _resolve_recipient_ids(self) -> list[int]:
         """Distinct discord ids of registered Dom/mes + Subs, minus blacklisted.
 
-        De-duplicated across the two tables and preserving Dom/mes-first order.
+        Shared with the 1 August final sequence so the two always target the
+        same people.
         """
-        dommes = await self.bot.dommes_repo.list_for_guild(ANNOUNCEMENT_GUILD_ID)
-        subs = await self.bot.subs_repo.list_for_guild(ANNOUNCEMENT_GUILD_ID)
-
-        ids: list[int] = []
-        seen: set[int] = set()
-        for entry in [*dommes, *subs]:
-            user_id = int(entry.discord_user_id)
-            if user_id in seen:
-                continue
-            seen.add(user_id)
-            if await self.bot.blacklist_repo.contains(user_id):
-                continue
-            ids.append(user_id)
-        return ids
+        return await resolve_registered_recipient_ids(self.bot, ANNOUNCEMENT_GUILD_ID)
 
     async def _resolve_recipients(
         self, user_ids: list[int]
     ) -> list[discord.abc.Messageable]:
         """Resolve ids to messageable users, skipping any that can't be found."""
-        recipients: list[discord.abc.Messageable] = []
-        for user_id in user_ids:
-            user = self.bot.get_user(user_id)
-            if user is None:
-                try:
-                    user = await self.bot.fetch_user(user_id)
-                except discord.HTTPException:
-                    log.warning(
-                        "Shutdown announcement: could not resolve user_id=%s",
-                        user_id,
-                    )
-                    continue
-            recipients.append(user)
-        return recipients
+        return await resolve_messageable_recipients(self.bot, user_ids)
 
     async def _deliver(
         self, recipients: list[discord.abc.Messageable]

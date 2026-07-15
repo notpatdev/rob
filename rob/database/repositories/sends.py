@@ -227,6 +227,74 @@ class SendsRepository:
             )
         return [_build_send(row) for row in rows]
 
+    async def counted_sends_for_recipient(
+        self,
+        guild_id: int,
+        discord_user_id: int,
+    ) -> list[dict]:
+        """Every counted send involving ``discord_user_id`` (as Dom/me *or* sub),
+        newest first, with the Dom/me's public label resolved. Shaped for the
+        keepsake PDF — no ids in the returned dicts."""
+        from rob.database.repositories.public_sends import (
+            COUNTED_SEND_FILTER_SQL,
+            DOMME_LABEL_SQL,
+        )
+
+        query = f"""
+            SELECT
+                s.sent_at AS sent_at,
+                s.amount_cents AS amount_cents,
+                s.currency AS currency,
+                s.item_name AS item_name,
+                s.sub_name AS sub_name,
+                {DOMME_LABEL_SQL} AS domme_display_name
+            FROM sends s
+            LEFT JOIN dommes d ON d.id = s.domme_id AND d.guild_id = s.guild_id
+            WHERE s.guild_id = $1
+              AND {COUNTED_SEND_FILTER_SQL}
+              AND (s.domme_user_id = $2 OR s.sub_user_id = $2)
+            ORDER BY s.sent_at DESC, s.id DESC
+        """
+        async with self.database.acquire() as connection:
+            rows = await connection.fetch(query, guild_id, discord_user_id)
+        return [
+            {
+                "sent_at": row["sent_at"],
+                "amount_cents": int(row["amount_cents"]),
+                "currency": str(row["currency"]),
+                "item_name": row["item_name"],
+                "sub_name": row["sub_name"],
+                "domme_display_name": row["domme_display_name"],
+            }
+            for row in rows
+        ]
+
+    async def anonymise_guild_sends(self, guild_id: int) -> int:
+        """IRREVERSIBLE. Strip identities from every send in ``guild_id`` while
+        keeping amount / currency / date and the Dom/me link, so server totals
+        still compute. Clears sender name/ids and any free-text or Discord ids.
+        Returns the number of rows updated."""
+        async with self.database.acquire() as connection:
+            result = await connection.execute(
+                """
+                UPDATE sends
+                SET sub_name = NULL,
+                    sub_user_id = NULL,
+                    sub_id = NULL,
+                    domme_user_id = 0,
+                    logged_by = NULL,
+                    external_id = NULL,
+                    event_id = NULL,
+                    fallback_event_hash = NULL,
+                    item_name = NULL,
+                    item_image_url = NULL,
+                    discord_message_id = NULL
+                WHERE guild_id = $1
+                """,
+                guild_id,
+            )
+        return int(result.rsplit(" ", 1)[-1])
+
     async def fetch_for_status(self, status: str, *, limit: int = 50) -> list[SendRecord]:
         async with self.database.acquire() as connection:
             rows = await connection.fetch(

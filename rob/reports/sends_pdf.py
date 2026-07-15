@@ -68,6 +68,50 @@ class SendsPdfReport:
     all_sends: list[PdfSendRow] = field(default_factory=list)
 
 
+def build_recipient_report(
+    *,
+    display_name: str,
+    generated_at: datetime,
+    rows: list[dict],
+) -> SendsPdfReport:
+    """Assemble a :class:`SendsPdfReport` from recipient rows (dicts with
+    ``sent_at``, ``amount_cents``, ``currency``, ``item_name``, ``sub_name``,
+    ``domme_display_name``), newest first."""
+    send_rows = [
+        PdfSendRow(
+            sent_at=row["sent_at"],
+            amount_cents=int(row["amount_cents"]),
+            currency=str(row["currency"]),
+            domme_display_name=row.get("domme_display_name"),
+            item_name=row.get("item_name"),
+            sub_name=row.get("sub_name"),
+        )
+        for row in rows
+    ]
+
+    buckets: dict[str, list[int]] = {}
+    for send in send_rows:
+        bucket = buckets.setdefault(send.currency, [0, 0])
+        bucket[0] += send.amount_cents
+        bucket[1] += 1
+    totals = sorted(
+        (
+            PdfCurrencyTotal(currency=cur, amount_cents=amt, count=cnt)
+            for cur, (amt, cnt) in buckets.items()
+        ),
+        key=lambda t: (-t.amount_cents, t.currency),
+    )
+
+    return SendsPdfReport(
+        display_name=display_name,
+        generated_at=generated_at,
+        last_updated=(send_rows[0].sent_at if send_rows else None),
+        total_count=len(send_rows),
+        totals=totals,
+        all_sends=send_rows,
+    )
+
+
 def _money(amount_cents: int, currency: str) -> str:
     symbol = _CURRENCY_SYMBOLS.get((currency or "").upper())
     value = f"{amount_cents / 100:,.2f}"

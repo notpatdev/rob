@@ -232,6 +232,94 @@ def test_repair_mention_sub_links_skips_update_when_no_candidates():
     assert connection.execute_calls == []
 
 
+def test_counted_sends_for_recipient_scopes_filters_and_shapes_rows():
+    now = datetime.now(timezone.utc)
+    db_row = {
+        "sent_at": now,
+        "amount_cents": 2500,
+        "currency": "USD",
+        "item_name": "Coffee",
+        "sub_name": "gifter_name",
+        "domme_display_name": "Miss X",
+    }
+    connection = _FakeConnection(fetch_responses=[[db_row]])
+    repo = SendsRepository(_FakeDatabase(connection))
+
+    rows = asyncio.run(repo.counted_sends_for_recipient(1485460387355820034, 99))
+
+    query, params = connection.fetch_calls[0]
+    # Guild + discord id bound as parameters (no interpolation of caller input).
+    assert params == (1485460387355820034, 99)
+    # Counted-send filter applied in SQL.
+    assert "discord_post_status = 'posted'" in query
+    assert "is_private = false" in query
+    assert "is_test_send IS NOT TRUE" in query
+    # Matches the user as Dom/me (recipient) OR sub (sender), newest first.
+    assert "s.domme_user_id = $2 OR s.sub_user_id = $2" in query
+    assert "ORDER BY s.sent_at DESC, s.id DESC" in query
+    # Domme label resolved via the LEFT JOIN, not a raw id.
+    assert "LEFT JOIN dommes d" in query
+
+    assert len(rows) == 1
+    row = rows[0]
+    # Lean dict shaped for the PDF — no ids of any kind.
+    assert set(row) == {
+        "sent_at",
+        "amount_cents",
+        "currency",
+        "item_name",
+        "sub_name",
+        "domme_display_name",
+    }
+    assert row["amount_cents"] == 2500
+    assert row["domme_display_name"] == "Miss X"
+
+
+def test_counted_sends_for_recipient_returns_empty_when_no_rows():
+    connection = _FakeConnection(fetch_responses=[[]])
+    repo = SendsRepository(_FakeDatabase(connection))
+    rows = asyncio.run(repo.counted_sends_for_recipient(1, 2))
+    assert rows == []
+
+
+def test_anonymise_guild_sends_strips_identities_keeps_totals():
+    connection = _FakeConnection(execute_responses=["UPDATE 42"])
+    repo = SendsRepository(_FakeDatabase(connection))
+
+    updated = asyncio.run(repo.anonymise_guild_sends(1485460387355820034))
+
+    assert updated == 42
+    query, params = connection.execute_calls[0]
+    assert params == (1485460387355820034,)
+    assert "UPDATE sends" in query
+    assert "WHERE guild_id = $1" in query
+    # Identity columns are cleared.
+    for cleared in (
+        "sub_name = NULL",
+        "sub_user_id = NULL",
+        "sub_id = NULL",
+        "domme_user_id = 0",
+        "logged_by = NULL",
+        "external_id = NULL",
+        "event_id = NULL",
+        "fallback_event_hash = NULL",
+        "item_name = NULL",
+        "item_image_url = NULL",
+        "discord_message_id = NULL",
+    ):
+        assert cleared in query
+    # Figures that still power server totals are NOT touched.
+    for kept in ("amount_cents", "currency", "sent_at", "domme_id"):
+        assert f"{kept} =" not in query
+
+
+def test_anonymise_guild_sends_returns_zero_when_nothing_matches():
+    connection = _FakeConnection(execute_responses=["UPDATE 0"])
+    repo = SendsRepository(_FakeDatabase(connection))
+    updated = asyncio.run(repo.anonymise_guild_sends(7))
+    assert updated == 0
+
+
 def test_public_send_id_db_build_scripts_define_column_and_unique_index():
     core_schema = Path("db/build/001_core_schema.sql").read_text(encoding="utf-8")
     indexes = Path("db/build/002_indexes.sql").read_text(encoding="utf-8")

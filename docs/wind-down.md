@@ -19,7 +19,7 @@ instants are written directly, no tz database needed). See
 | 0 | — | Normal operation. |
 | 1 | 16 Jul | Sends no longer **posted / leaderboarded** (still recorded), **inactivity** loop off, **warn relay** off, new **registrations** closed. `/add`, backend recording and the count still run. |
 | 2 | 20 Jul | Webhook **stops recording** Throne sends, `/add` **closed**. Webhook URLs are functionally invalidated (reversibly) by the recording gate. Only the count runs. |
-| 3 | 01 Aug | Everything off, including the **count**. The final "goodbye" sequence (PDF + thank-you DM, final stats post, anonymisation) is a separate build (Stage 2). |
+| 3 | 01 Aug | Everything off, including the **count**. Triggers the **final sequence** (below): final stats post → farewell DMs with keepsake PDFs → anonymisation. |
 
 ## How it advances
 
@@ -56,3 +56,37 @@ its next request.
 
 The public website / API (`/public/*`) and `/forgetme` deliberately stay up so
 people can still retrieve their data during the wind-down.
+
+## The 1 August final sequence (Phase 3)
+
+When the wind-down reaches Phase 3, `WindDownCog` fires
+`FinalSequenceService.maybe_run()` (`rob/services/final_sequence.py`) — the last
+thing Rob ever does. It runs once, from the wind-down loop tick (and, for
+convenience, immediately when the owner forces Phase 3 via `/winddown phase:3`).
+
+Three steps, in a strict order because the last one is **irreversible**:
+
+1. **Final stats** — posts Rob's closing numbers for VIB (`final_stats_card`,
+   built from the public `GuildSummary` aggregate) to the leaderboard channel.
+   Best-effort: a failure here never blocks the rest.
+2. **Farewell DMs** — DMs every registered Dom/me and Sub (the same audience as
+   `/shutdown`, via `rob/services/recipients.py`) a thank-you message with their
+   personal **keepsake PDF** attached (`generate_sends_pdf`, built from each
+   person's own send history). Must run *before* step 3, which erases that
+   history. Individual DM failures (closed DMs, blocks) are counted, not fatal.
+3. **Anonymise** — `SendsRepository.anonymise_guild_sends` irreversibly strips
+   identities (sender name/ids, Discord ids, free-text item fields) from every
+   send in the guild, keeping the amount / currency / date and the Dom/me link
+   so VIB's public totals still compute.
+
+### Idempotency & resume
+
+Each step sets its own flag in `bot_settings`
+(`final_sequence_stats_posted`, `final_sequence_dms_sent`,
+`final_sequence_anonymised`, `final_sequence_completed`). A restart part-way
+through skips finished steps — the mass DM and the anonymisation never repeat —
+and a process-local lock stops two overlapping triggers from running it twice.
+Once `final_sequence_completed` is set, `maybe_run()` is a no-op.
+
+The thank-you and stats **wording** lives in `rob/ui/cards/final_sequence.py`
+and is owner-editable; the tests assert card structure, not prose.

@@ -10,6 +10,7 @@ from rob.reports.sends_pdf import (
     _dt,
     _money,
     _truncate,
+    build_recipient_report,
     generate_sends_pdf,
 )
 
@@ -78,3 +79,79 @@ def test_truncate():
     assert _truncate("a very long value here", 8).endswith("…")
     # Trailing whitespace is trimmed before the ellipsis, so it's <= the limit.
     assert len(_truncate("a very long value here", 8)) <= 8
+
+
+def _recipient_dict(**overrides) -> dict:
+    base = {
+        "sent_at": datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc),
+        "amount_cents": 2500,
+        "currency": "USD",
+        "item_name": "Coffee",
+        "sub_name": "gifter_name",
+        "domme_display_name": "Miss X",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_build_recipient_report_groups_totals_and_orders_by_size():
+    newest = datetime(2026, 7, 12, tzinfo=timezone.utc)
+    rows = [
+        _recipient_dict(sent_at=newest, amount_cents=1000, currency="USD"),
+        _recipient_dict(
+            sent_at=datetime(2026, 7, 11, tzinfo=timezone.utc),
+            amount_cents=5000,
+            currency="EUR",
+        ),
+        _recipient_dict(
+            sent_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+            amount_cents=500,
+            currency="USD",
+        ),
+    ]
+
+    report = build_recipient_report(
+        display_name="gifter_name",
+        generated_at=datetime(2026, 8, 1, 8, 0, tzinfo=timezone.utc),
+        rows=rows,
+    )
+
+    assert report.display_name == "gifter_name"
+    assert report.total_count == 3
+    # last_updated is the newest row's timestamp (rows arrive newest-first).
+    assert report.last_updated == newest
+    # Totals grouped per currency, biggest amount first.
+    assert [(t.currency, t.amount_cents, t.count) for t in report.totals] == [
+        ("EUR", 5000, 1),
+        ("USD", 1500, 2),
+    ]
+    assert len(report.all_sends) == 3
+    assert all(isinstance(s, PdfSendRow) for s in report.all_sends)
+
+
+def test_build_recipient_report_handles_empty_rows():
+    report = build_recipient_report(
+        display_name="nobody",
+        generated_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        rows=[],
+    )
+    assert report.total_count == 0
+    assert report.last_updated is None
+    assert report.totals == []
+    assert report.all_sends == []
+    # An empty recipient report still renders a valid PDF.
+    assert generate_sends_pdf(report)[:4] == b"%PDF"
+
+
+def test_build_recipient_report_tolerates_missing_optional_fields():
+    report = build_recipient_report(
+        display_name="someone",
+        generated_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        rows=[{"sent_at": None, "amount_cents": 100, "currency": "gbp"}],
+    )
+    row = report.all_sends[0]
+    assert row.domme_display_name is None
+    assert row.item_name is None
+    assert row.sub_name is None
+    # Produces a valid PDF despite the sparse row.
+    assert generate_sends_pdf(report)[:4] == b"%PDF"

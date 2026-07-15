@@ -103,3 +103,80 @@ def test_winddown_command_owner_can_force_phase_and_toggle_auto():
         assert interaction.response.messages[0]["ephemeral"] is True
 
     asyncio.run(run())
+
+
+class _FakeFinalSequence:
+    def __init__(self, *, raise_error=False):
+        self.calls = 0
+        self.raise_error = raise_error
+
+    async def maybe_run(self) -> bool:
+        self.calls += 1
+        if self.raise_error:
+            raise RuntimeError("boom")
+        return True
+
+
+def _make_cog_with_service(service):
+    maintenance = MaintenanceService(_FakeBotState())
+    bot = _FakeBot(maintenance)
+    bot.final_sequence_service = service
+    cog = WindDownCog(bot)
+    cog.wind_down_loop.cancel()
+    return cog, maintenance
+
+
+def test_run_final_sequence_triggers_the_service():
+    async def run():
+        service = _FakeFinalSequence()
+        cog, _ = _make_cog_with_service(service)
+        await cog._run_final_sequence()
+        assert service.calls == 1
+
+    asyncio.run(run())
+
+
+def test_run_final_sequence_is_a_noop_without_a_service():
+    async def run():
+        cog, _ = _make_cog()  # bot has no final_sequence_service
+        await cog._run_final_sequence()  # must not raise
+
+    asyncio.run(run())
+
+
+def test_run_final_sequence_swallows_service_errors():
+    async def run():
+        service = _FakeFinalSequence(raise_error=True)
+        cog, _ = _make_cog_with_service(service)
+        await cog._run_final_sequence()  # error is logged, not raised
+        assert service.calls == 1
+
+    asyncio.run(run())
+
+
+def test_forcing_the_final_phase_kicks_the_sequence():
+    async def run():
+        service = _FakeFinalSequence()
+        cog, maintenance = _make_cog_with_service(service)
+        interaction = _FakeInteraction(user_id=OWNER_USER_ID)
+        await WindDownCog.winddown_command.callback(cog, interaction, phase=3)
+        # The command schedules the kick as a task so its reply isn't blocked;
+        # let the event loop run it.
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert service.calls == 1
+
+    asyncio.run(run())
+
+
+def test_forcing_an_earlier_phase_does_not_kick_the_sequence():
+    async def run():
+        service = _FakeFinalSequence()
+        cog, maintenance = _make_cog_with_service(service)
+        interaction = _FakeInteraction(user_id=OWNER_USER_ID)
+        await WindDownCog.winddown_command.callback(cog, interaction, phase=1)
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert service.calls == 0
+
+    asyncio.run(run())

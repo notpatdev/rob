@@ -9,6 +9,7 @@ read the phase flag and behave accordingly; because the flag lives in the shared
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -18,6 +19,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from rob.config.guilds import BOT_OWNER_USER_IDS, MAIN_GUILD_ID, TEST_GUILD_ID
+from rob.services.final_sequence import FINAL_PHASE
 from rob.services.wind_down import MAX_PHASE, compute_wind_down_phase
 from rob.ui.cards.errors import error_card
 from rob.ui.components import make_card, render
@@ -62,10 +64,27 @@ class WindDownCog(commands.Cog):
             return target
         return None
 
+    def _final_sequence_service(self):
+        return getattr(self.bot, "final_sequence_service", None)
+
+    async def _run_final_sequence(self) -> None:
+        """Fire the 1 August final sequence if we've reached the final phase.
+
+        Self-guards on phase and completion, so calling it every tick is safe.
+        """
+        service = self._final_sequence_service()
+        if service is None:
+            return
+        try:
+            await service.maybe_run()
+        except Exception:  # pragma: no cover - safety around the runtime loop
+            log.exception("Final sequence run failed.")
+
     @tasks.loop(minutes=15)
     async def wind_down_loop(self) -> None:
         try:
             await self.apply_due_phase()
+            await self._run_final_sequence()
         except Exception:  # pragma: no cover - safety around the runtime loop
             log.exception("Wind-down loop failed.")
 
@@ -106,6 +125,11 @@ class WindDownCog(commands.Cog):
                 int(phase),
                 getattr(interaction.user, "id", None),
             )
+            # Kick the final sequence without blocking the command's reply — the
+            # mass DM can take a while. If it's not the final phase, maybe_run()
+            # is a no-op. The loop would pick it up within 15 min regardless.
+            if int(phase) >= FINAL_PHASE and self._final_sequence_service() is not None:
+                asyncio.create_task(self._run_final_sequence())
 
         current = await maintenance.get_wind_down_phase()
         auto_on = await maintenance.wind_down_auto_advance()

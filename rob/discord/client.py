@@ -44,6 +44,7 @@ from rob.discord.cogs.wind_down import WindDownCog
 from rob.services.counting_service import CountingService
 from rob.opsapi import BotOpsServer
 from rob.services.dm_onboarding_service import DMOnboardingService
+from rob.services.final_sequence import FinalSequenceService
 from rob.services.inactivity_service import InactivityService
 from rob.services.leaderboard_service import LeaderboardService
 from rob.services.maintenance_service import MaintenanceService
@@ -196,6 +197,7 @@ class RobBot(commands.Bot):
             port=self.settings.rob_ops_port,
             secret=self.settings.rob_ops_secret,
         )
+        self.final_sequence_service = FinalSequenceService(bot=self)
         self.transcription_service = TranscriptionService(
             enabled=self.settings.voice_transcribe_enabled,
             model=self.settings.voice_transcribe_model,

@@ -13,11 +13,14 @@ export const MAX_RESPONSE_BYTES = 512 * 1024;
 export interface ImporterDeps {
   readonly fetchImpl: typeof fetch;
   readonly resolveIps: DnsResolver;
+  /** Test seam; production always uses the fixed five-second total deadline. */
+  readonly timeoutMs?: number;
 }
 
 export const defaultImporterDeps: ImporterDeps = {
   fetchImpl: (...args: Parameters<typeof fetch>) => fetch(...args),
-  resolveIps: (hostname: string) => resolveHostnameIpsViaDoh(hostname, defaultImporterDeps.fetchImpl),
+  resolveIps: (hostname: string, signal?: AbortSignal) =>
+    resolveHostnameIpsViaDoh(hostname, defaultImporterDeps.fetchImpl, signal),
 };
 
 export interface FetchedHtml {
@@ -56,59 +59,68 @@ async function readBodyCapped(response: Response): Promise<string> {
 /**
  * Fetches `rawUrl` as HTML, enforcing every SSRF guard end to end: scheme/credential/port/
  * IP-literal/hostname validation and a fresh DNS preflight on the initial URL and on every
- * `redirect: "manual"` hop (up to `MAX_REDIRECTS`), a hard `FETCH_TIMEOUT_MS` deadline per hop,
+ * `redirect: "manual"` hop (up to `MAX_REDIRECTS`), one hard `FETCH_TIMEOUT_MS` deadline for the
+ * entire DNS/redirect/body operation,
  * an HTML-only content-type check, and a capped, streamed read of the response body. Never
  * executes any script found in the page; the caller only ever sees inert HTML text.
  */
 export async function fetchHtmlSafely(rawUrl: string, deps: ImporterDeps = defaultImporterDeps): Promise<FetchedHtml> {
   let currentUrl = validateCandidateUrl(rawUrl);
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    deps.timeoutMs ?? FETCH_TIMEOUT_MS,
+  );
 
-  for (let redirectCount = 0; ; redirectCount++) {
-    await preflightDns(currentUrl.hostname, deps.resolveIps);
+  try {
+    for (let redirectCount = 0; ; redirectCount++) {
+      await preflightDns(currentUrl.hostname, deps.resolveIps, controller.signal);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    let response: Response;
-    try {
-      response = await deps.fetchImpl(currentUrl.toString(), {
-        redirect: "manual",
-        signal: controller.signal,
-        headers: { accept: "text/html" },
-      });
-    } catch {
-      blocked("fetch_failed", "could not fetch that page");
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    if (response.status >= 300 && response.status < 400) {
-      if (redirectCount >= MAX_REDIRECTS) blocked("too_many_redirects", "too many redirects");
-      const location = response.headers.get("location");
-      if (!location) blocked("invalid_redirect", "redirect response had no Location header");
-      let redirectTarget: URL;
+      let response: Response;
       try {
-        redirectTarget = new URL(location as string, currentUrl);
+        response = await deps.fetchImpl(currentUrl.toString(), {
+          redirect: "manual",
+          signal: controller.signal,
+          headers: { accept: "text/html" },
+        });
       } catch {
-        blocked("invalid_redirect", "redirect Location header was not a valid URL");
+        blocked("fetch_failed", "could not fetch that page");
       }
-      // Re-validate the *entire* redirect target from scratch -- a same-host redirect could
-      // still change scheme/port, and a cross-host redirect is exactly the "server-side open
-      // redirect to an internal host" case this whole module exists to stop.
-      currentUrl = validateCandidateUrl(redirectTarget.toString());
-      continue;
+
+      if (response.status >= 300 && response.status < 400) {
+        if (redirectCount >= MAX_REDIRECTS) blocked("too_many_redirects", "too many redirects");
+        const location = response.headers.get("location");
+        if (!location) blocked("invalid_redirect", "redirect response had no Location header");
+        let redirectTarget: URL;
+        try {
+          redirectTarget = new URL(location as string, currentUrl);
+        } catch {
+          blocked("invalid_redirect", "redirect Location header was not a valid URL");
+        }
+        // Re-validate the *entire* redirect target from scratch -- a same-host redirect could
+        // still change scheme/port, and a cross-host redirect is exactly the "server-side open
+        // redirect to an internal host" case this whole module exists to stop.
+        currentUrl = validateCandidateUrl(redirectTarget.toString());
+        continue;
+      }
+
+      if (!response.ok) blocked("fetch_failed", `unexpected response status ${response.status}`);
+
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!/text\/html/i.test(contentType)) blocked("unsupported_content_type", "response was not HTML");
+
+      const contentLengthHeader = response.headers.get("content-length");
+      if (contentLengthHeader !== null && Number(contentLengthHeader) > MAX_RESPONSE_BYTES) {
+        blocked("response_too_large", "response exceeded the size limit");
+      }
+
+      const html = await readBodyCapped(response);
+      return { html, finalUrl: currentUrl.toString() };
     }
-
-    if (!response.ok) blocked("fetch_failed", `unexpected response status ${response.status}`);
-
-    const contentType = response.headers.get("content-type") ?? "";
-    if (!/text\/html/i.test(contentType)) blocked("unsupported_content_type", "response was not HTML");
-
-    const contentLengthHeader = response.headers.get("content-length");
-    if (contentLengthHeader !== null && Number(contentLengthHeader) > MAX_RESPONSE_BYTES) {
-      blocked("response_too_large", "response exceeded the size limit");
-    }
-
-    const html = await readBodyCapped(response);
-    return { html, finalUrl: currentUrl.toString() };
+  } catch (error) {
+    if (error instanceof ImportBlockedError) throw error;
+    blocked("fetch_failed", "could not fetch that page");
+  } finally {
+    clearTimeout(timeout);
   }
 }

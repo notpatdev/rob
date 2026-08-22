@@ -10,12 +10,10 @@
  * simply matches zero rows is *not* an error -- so "revision doesn't
  * match" cannot by itself stop the rest of a batch from applying. Every
  * mutation here is instead structured as: the very first statement in the
- * batch is the real compare-and-swap (`UPDATE ... WHERE revision = ?old`),
- * and every following statement is guarded by an `EXISTS` subquery that
- * only matches if that first statement actually landed at the *new*
- * revision. If the CAS fails, every later statement in the same batch
- * becomes a no-op too, so a stale caller's request has zero effect and the
- * whole operation atomically either fully applies or fully doesn't.
+ * batch is the compare-and-swap (`UPDATE ... WHERE revision = ?old`), and
+ * every earlier write is guarded by that same old revision. D1 serializes
+ * each atomic batch, so a losing batch starts after the winner committed
+ * the next revision: all of its guarded writes and final CAS become no-ops.
  */
 import type { Env } from "../env.js";
 import { requireHomeGuildId } from "../env.js";
@@ -281,6 +279,20 @@ async function findActiveDraftRow(env: Env, input: StartDraftInput): Promise<Dra
 }
 
 /** Loads the current published document (if any) as a starting snapshot, or an empty one. */
+function cloneSnapshotForDraft(snapshot: DocumentSnapshot): DocumentSnapshot {
+  const remappedLinkIds = new Map<string, string>();
+  const links = snapshot.links.map((link) => {
+    const clonedId = newId();
+    if (link.id !== null) remappedLinkIds.set(link.id, clonedId);
+    return { ...link, id: clonedId };
+  });
+  const preferredPaymentLinkId =
+    snapshot.preferredPaymentLinkId === null
+      ? null
+      : (remappedLinkIds.get(snapshot.preferredPaymentLinkId) ?? snapshot.preferredPaymentLinkId);
+  return { ...snapshot, links, preferredPaymentLinkId };
+}
+
 async function loadStartingSnapshot(env: Env, input: StartDraftInput): Promise<{ snapshot: DocumentSnapshot; baseVersion: number }> {
   if (input.targetScope === "global") {
     const root = await env.DB.prepare("SELECT current_document_id, version FROM global_profiles WHERE owner_user_id = ?")
@@ -288,7 +300,10 @@ async function loadStartingSnapshot(env: Env, input: StartDraftInput): Promise<{
       .first<{ current_document_id: string; version: number }>();
     if (root === null) return { snapshot: EMPTY_SNAPSHOT, baseVersion: 0 };
     const snapshot = await readDocumentSnapshot(env, root.current_document_id);
-    return { snapshot: snapshot ?? EMPTY_SNAPSHOT, baseVersion: root.version };
+    return {
+      snapshot: snapshot === null ? EMPTY_SNAPSHOT : cloneSnapshotForDraft(snapshot),
+      baseVersion: root.version,
+    };
   }
 
   const root = await env.DB.prepare(
@@ -303,7 +318,10 @@ async function loadStartingSnapshot(env: Env, input: StartDraftInput): Promise<{
     return { snapshot: EMPTY_SNAPSHOT, baseVersion: root?.version ?? 0 };
   }
   const snapshot = await readDocumentSnapshot(env, root.current_document_id);
-  return { snapshot: snapshot ?? EMPTY_SNAPSHOT, baseVersion: root.version };
+  return {
+    snapshot: snapshot === null ? EMPTY_SNAPSHOT : cloneSnapshotForDraft(snapshot),
+    baseVersion: root.version,
+  };
 }
 
 export async function startDraft(env: Env, input: StartDraftInput): Promise<StartDraftResult> {
@@ -533,6 +551,18 @@ export async function applyDraftStep(env: Env, input: ApplyStepInput): Promise<D
   if (!applicableSteps.includes(input.stepKey)) {
     badRequest("step_not_applicable", `${input.stepKey} is not part of this draft's step sequence`);
   }
+  const bodyRecord =
+    typeof input.body === "object" && input.body !== null && !Array.isArray(input.body)
+      ? (input.body as Record<string, unknown>)
+      : null;
+  const completeValue = bodyRecord?.complete;
+  if (completeValue !== undefined && typeof completeValue !== "boolean") {
+    badRequest("invalid_complete", "complete must be a boolean when provided");
+  }
+  const completeStep = completeValue !== false;
+  if (!completeStep && input.stepKey !== "identity") {
+    badRequest("partial_step_not_supported", "only identity supports partial draft persistence");
+  }
 
   let newSnapshot: DocumentSnapshot;
   try {
@@ -544,26 +574,33 @@ export async function applyDraftStep(env: Env, input: ApplyStepInput): Promise<D
 
   const now = nowIso();
   const newRevision = draft.revision + 1;
-  const guard = { draftId: draft.id, newRevision };
+  const guard = { draftId: draft.id, expectedRevision: draft.revision };
 
   const statements: D1PreparedStatement[] = [
-    env.DB.prepare(
-      "UPDATE profile_drafts SET revision = ?, current_step = ?, updated_at = ? WHERE id = ? AND revision = ? AND status = 'active'",
-    ).bind(newRevision, input.stepKey, now, draft.id, draft.revision),
     ...buildDocumentWriteStatements(env, draft.document_id, draft.owner_user_id, newSnapshot, now, {
       isNew: false,
       guard,
     }),
-    env.DB.prepare(
+  ];
+  if (completeStep) {
+    statements.push(env.DB.prepare(
       `INSERT INTO profile_draft_steps (draft_id, step_key, status, completed_at)
        SELECT ?, ?, 'completed', ?
        WHERE EXISTS (SELECT 1 FROM profile_drafts WHERE id = ? AND revision = ? AND status = 'active')
        ON CONFLICT (draft_id, step_key) DO UPDATE SET status = 'completed', completed_at = excluded.completed_at`,
-    ).bind(draft.id, input.stepKey, now, draft.id, newRevision),
-  ];
+    ).bind(draft.id, input.stepKey, now, draft.id, draft.revision));
+  }
+  statements.push(
+    env.DB.prepare(
+      `UPDATE profile_drafts
+          SET revision = ?, current_step = ?, updated_at = ?
+        WHERE id = ? AND revision = ? AND status = 'active'
+          AND EXISTS (SELECT 1 FROM profile_documents WHERE id = ? AND state = 'draft')`,
+    ).bind(newRevision, input.stepKey, now, draft.id, draft.revision, draft.document_id),
+  );
 
   const results = await env.DB.batch(statements);
-  const guardResult = results[0];
+  const guardResult = results.at(-1);
   if (guardResult === undefined || guardResult.meta.changes === 0) {
     conflict("stale_revision", "expected_revision does not match the draft's current revision");
   }
@@ -597,20 +634,23 @@ export async function restartDraft(env: Env, input: RestartDraftInput): Promise<
 
   const now = nowIso();
   const newRevision = draft.revision + 1;
-  const guard = { draftId: draft.id, newRevision };
+  const guard = { draftId: draft.id, expectedRevision: draft.revision };
 
   const statements: D1PreparedStatement[] = [
     env.DB.prepare(
-      "UPDATE profile_drafts SET revision = ?, current_step = 'orientation', base_version = ?, updated_at = ? WHERE id = ? AND revision = ? AND status = 'active'",
-    ).bind(newRevision, baseVersion, now, draft.id, draft.revision),
-    env.DB.prepare(
       `DELETE FROM profile_draft_steps WHERE draft_id = ? AND EXISTS (SELECT 1 FROM profile_drafts WHERE id = ? AND revision = ? AND status = 'active')`,
-    ).bind(draft.id, draft.id, newRevision),
+    ).bind(draft.id, draft.id, draft.revision),
     ...buildDocumentWriteStatements(env, draft.document_id, draft.owner_user_id, snapshot, now, { isNew: false, guard }),
+    env.DB.prepare(
+      `UPDATE profile_drafts
+          SET revision = ?, current_step = 'orientation', base_version = ?, updated_at = ?
+        WHERE id = ? AND revision = ? AND status = 'active'
+          AND EXISTS (SELECT 1 FROM profile_documents WHERE id = ? AND state = 'draft')`,
+    ).bind(newRevision, baseVersion, now, draft.id, draft.revision, draft.document_id),
   ];
 
   const results = await env.DB.batch(statements);
-  const guardResult = results[0];
+  const guardResult = results.at(-1);
   if (guardResult === undefined || guardResult.meta.changes === 0) {
     conflict("stale_revision", "expected_revision does not match the draft's current revision");
   }

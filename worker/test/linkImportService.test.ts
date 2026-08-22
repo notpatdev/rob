@@ -40,15 +40,17 @@ describe("link import service (direct, injected deps)", () => {
     await setOrientation(started.id, owner, 0, "domme");
 
     const html = `<a href="https://twitter.com/example">Twitter</a><a href="https://cash.app/$example">Tip</a>`;
-    const importContract = await createLinkImport(
+    const created = await createLinkImport(
       env,
       { draftId: started.id, ownerUserId: owner, expectedRevision: 1, sourceUrl: "https://linkpage.example/me" },
       depsFor(html),
     );
+    const importContract = created.importContract;
     expect(importContract.status).toBe("ready");
     expect(importContract.provider).toBe("generic");
     expect(importContract.candidates).toHaveLength(2);
     expect(importContract.candidates.every((c) => c.selected)).toBe(true);
+    expect(created.draft.revision).toBe(2);
   });
 
   it("records a blocked import (no candidates) for an SSRF-violating source URL, without failing the request", async () => {
@@ -56,13 +58,15 @@ describe("link import service (direct, injected deps)", () => {
     const started = await startGlobalDraft(owner);
     await setOrientation(started.id, owner, 0, "domme");
 
-    const importContract = await createLinkImport(
+    const created = await createLinkImport(
       env,
       { draftId: started.id, ownerUserId: owner, expectedRevision: 1, sourceUrl: "https://10.0.0.5/" },
       { fetchImpl: (async () => new Response("")) as typeof fetch, resolveIps: async () => [] },
     );
+    const importContract = created.importContract;
     expect(importContract.status).toBe("blocked");
     expect(importContract.candidates).toEqual([]);
+    expect(created.draft.revision).toBe(2);
   });
 
   it("confirms an import: promotes selected candidates into the draft's own links atomically", async () => {
@@ -71,23 +75,24 @@ describe("link import service (direct, injected deps)", () => {
     await setOrientation(started.id, owner, 0, "domme");
 
     const html = `<a href="https://twitter.com/example">Twitter</a><a href="https://cash.app/$example">Tip</a>`;
-    const importContract = await createLinkImport(
+    const created = await createLinkImport(
       env,
       { draftId: started.id, ownerUserId: owner, expectedRevision: 1, sourceUrl: "https://linkpage.example/me" },
       depsFor(html),
     );
+    const importContract = created.importContract;
 
     const confirmed = await confirmLinkImport(env, {
       draftId: started.id,
       importId: importContract.id,
       ownerUserId: owner,
-      expectedRevision: 1,
+      expectedRevision: created.draft.revision,
       candidateIds: null,
     });
     expect(confirmed.addedLinkCount).toBe(2);
     expect(confirmed.skippedDuplicateCount).toBe(0);
     expect(confirmed.draft.document.links).toHaveLength(2);
-    expect(confirmed.draft.revision).toBe(2);
+    expect(confirmed.draft.revision).toBe(3);
   });
 
   it("confirming only a subset of candidate ids promotes just those", async () => {
@@ -96,18 +101,19 @@ describe("link import service (direct, injected deps)", () => {
     await setOrientation(started.id, owner, 0, "domme");
 
     const html = `<a href="https://twitter.com/example">Twitter</a><a href="https://cash.app/$example">Tip</a>`;
-    const importContract = await createLinkImport(
+    const created = await createLinkImport(
       env,
       { draftId: started.id, ownerUserId: owner, expectedRevision: 1, sourceUrl: "https://linkpage.example/me" },
       depsFor(html),
     );
+    const importContract = created.importContract;
     const twitterCandidateId = importContract.candidates.find((c) => c.platform === "twitter")!.id;
 
     const confirmed = await confirmLinkImport(env, {
       draftId: started.id,
       importId: importContract.id,
       ownerUserId: owner,
-      expectedRevision: 1,
+      expectedRevision: created.draft.revision,
       candidateIds: [twitterCandidateId],
     });
     expect(confirmed.addedLinkCount).toBe(1);
@@ -132,22 +138,77 @@ describe("link import service (direct, injected deps)", () => {
     const added = await readJson<DraftEnvelope>(addResponse);
 
     const html = `<a href="https://twitter.com/example">Twitter</a><a href="https://cash.app/$example">Tip</a>`;
-    const importContract = await createLinkImport(
+    const created = await createLinkImport(
       env,
       { draftId: started.id, ownerUserId: owner, expectedRevision: added.data.draft.revision, sourceUrl: "https://linkpage.example/me" },
       depsFor(html),
     );
+    const importContract = created.importContract;
 
     const confirmed = await confirmLinkImport(env, {
       draftId: started.id,
       importId: importContract.id,
       ownerUserId: owner,
-      expectedRevision: added.data.draft.revision,
+      expectedRevision: created.draft.revision,
       candidateIds: null,
     });
     expect(confirmed.addedLinkCount).toBe(1);
     expect(confirmed.skippedDuplicateCount).toBe(1);
     expect(confirmed.draft.document.links).toHaveLength(2);
+  });
+
+  it("filters payment candidates for a submissive profile", async () => {
+    const owner = "700000000000000006";
+    const started = await startGlobalDraft(owner);
+    await setOrientation(started.id, owner, 0, "submissive");
+
+    const created = await createLinkImport(
+      env,
+      {
+        draftId: started.id,
+        ownerUserId: owner,
+        expectedRevision: 1,
+        sourceUrl: "https://linkpage.example/me",
+      },
+      depsFor(
+        `<a href="https://twitter.com/example">Twitter</a><a href="https://cash.app/$example">Tip</a>`,
+      ),
+    );
+
+    expect(created.importContract.candidates).toEqual([
+      expect.objectContaining({ platform: "twitter", linkType: "social" }),
+    ]);
+  });
+
+  it("revalidates stored candidates before promoting them to public links", async () => {
+    const owner = "700000000000000007";
+    const started = await startGlobalDraft(owner);
+    await setOrientation(started.id, owner, 0, "domme");
+    const created = await createLinkImport(
+      env,
+      {
+        draftId: started.id,
+        ownerUserId: owner,
+        expectedRevision: 1,
+        sourceUrl: "https://linkpage.example/me",
+      },
+      depsFor(`<a href="https://twitter.com/example">Twitter</a>`),
+    );
+    await env.DB.prepare(
+      "UPDATE profile_link_import_candidates SET normalized_url = ? WHERE import_id = ?",
+    )
+      .bind("https://user:password@example.com/private", created.importContract.id)
+      .run();
+
+    await expect(
+      confirmLinkImport(env, {
+        draftId: started.id,
+        importId: created.importContract.id,
+        ownerUserId: owner,
+        expectedRevision: created.draft.revision,
+        candidateIds: null,
+      }),
+    ).rejects.toThrowError(expect.objectContaining({ code: "invalid_url_credentials" }));
   });
 });
 
@@ -182,8 +243,14 @@ describe("link import HTTP routes (real fetch wiring via fetchMock)", () => {
       ),
     );
     expect(response.status).toBe(201);
-    const body = await readJson<{ data: { import: { status: string; candidates: { platform: string }[] } } }>(response);
+    const body = await readJson<{
+      data: {
+        import: { status: string; candidates: { platform: string }[] };
+        draft: { revision: number };
+      };
+    }>(response);
     expect(body.data.import.status).toBe("ready");
     expect(body.data.import.candidates).toEqual([expect.objectContaining({ platform: "twitter" })]);
+    expect(body.data.draft.revision).toBe(2);
   });
 });

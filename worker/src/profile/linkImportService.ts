@@ -6,9 +6,18 @@
  */
 import type { Env } from "../env.js";
 import { newId, nowIso } from "../util/id.js";
-import { validateHttpsUrl, LIMITS } from "./contracts.js";
+import { LIMITS, ORIENTATION_CAPABILITIES, validateHttpsUrl } from "./contracts.js";
 import { EMPTY_SNAPSHOT, buildDocumentWriteStatements, readDocumentSnapshot, type DocumentLinkInput, type DocumentSnapshot } from "./documentStore.js";
-import { badRequest, buildContract, conflict, loadOwnedDraft, type DraftContract, type DraftRow } from "./draftService.js";
+import {
+  badRequest,
+  buildContract,
+  conflict,
+  countResolvedVisibleLinks,
+  loadOwnedDraft,
+  resolveGoverningOrientation,
+  type DraftContract,
+  type DraftRow,
+} from "./draftService.js";
 import { runLinkImport, classifyImportFailureStatus, ImportBlockedError, type ImportProvider } from "./importer/index.js";
 import type { ImporterDeps } from "./importer/fetchSafely.js";
 
@@ -102,13 +111,28 @@ export interface CreateLinkImportInput {
   readonly sourceUrl: string;
 }
 
+export interface CreateLinkImportResult {
+  readonly importContract: ImportContract;
+  readonly draft: DraftContract;
+}
+
 /** Fetches `input.sourceUrl` under the importer's SSRF guards and stores whatever candidates
  * (possibly zero) it found. A blocked/failed fetch is not itself an application error: it is
  * recorded as a `blocked`/`fetch_failed` import with no candidates so the wizard can fall back to
  * safe manual link entry, exactly like a page that yields zero links for any other reason. */
-export async function createLinkImport(env: Env, input: CreateLinkImportInput, deps?: ImporterDeps): Promise<ImportContract> {
+export async function createLinkImport(
+  env: Env,
+  input: CreateLinkImportInput,
+  deps?: ImporterDeps,
+): Promise<CreateLinkImportResult> {
   const draft = await assertDraftMutable(env, input.draftId, input.ownerUserId, input.expectedRevision);
   const sourceUrl = validateHttpsUrl(input.sourceUrl, "source_url");
+  const current = (await readDocumentSnapshot(env, draft.document_id)) ?? EMPTY_SNAPSHOT;
+  const governingOrientation = await resolveGoverningOrientation(env, draft, current);
+  if (governingOrientation === null) {
+    badRequest("orientation_required", "orientation must be chosen before importing links");
+  }
+  const capabilities = ORIENTATION_CAPABILITIES[governingOrientation];
 
   const now = nowIso();
   const importId = newId();
@@ -121,31 +145,64 @@ export async function createLinkImport(env: Env, input: CreateLinkImportInput, d
     const outcome = await runLinkImport(sourceUrl, deps);
     provider = outcome.provider;
     status = outcome.status;
-    candidates = [...outcome.candidates];
+    candidates = outcome.candidates.filter(
+      (candidate) => candidate.linkType !== "payment" || capabilities.payment,
+    );
+    if (status === "ready" && candidates.length === 0) status = "no_links_found";
   } catch (error) {
     if (!(error instanceof ImportBlockedError)) throw error;
     status = classifyImportFailureStatus(error);
   }
 
+  const newRevision = draft.revision + 1;
+  const revisionGuard =
+    "EXISTS (SELECT 1 FROM profile_drafts WHERE id = ? AND revision = ? AND status = 'active')";
   const statements: D1PreparedStatement[] = [
     env.DB.prepare(
       `INSERT INTO profile_link_imports (id, draft_id, source_url, provider, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(importId, draft.id, sourceUrl, provider, status, now, now),
+       SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${revisionGuard}`,
+    ).bind(importId, draft.id, sourceUrl, provider, status, now, now, draft.id, draft.revision),
   ];
   candidates.forEach((candidate, index) => {
     statements.push(
       env.DB.prepare(
         `INSERT INTO profile_link_import_candidates
            (id, import_id, platform, public_label, username, normalized_url, link_type, sort_order, selected)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-      ).bind(newId(), importId, candidate.platform, candidate.publicLabel, candidate.username, candidate.normalizedUrl, candidate.linkType, index),
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, 1 WHERE ${revisionGuard}`,
+      ).bind(
+        newId(),
+        importId,
+        candidate.platform,
+        candidate.publicLabel,
+        candidate.username,
+        candidate.normalizedUrl,
+        candidate.linkType,
+        index,
+        draft.id,
+        draft.revision,
+      ),
     );
   });
-  await env.DB.batch(statements);
+  statements.push(
+    env.DB.prepare(
+      `UPDATE profile_drafts
+          SET revision = ?, updated_at = ?
+        WHERE id = ? AND revision = ? AND status = 'active'
+          AND EXISTS (SELECT 1 FROM profile_documents WHERE id = ? AND state = 'draft')`,
+    ).bind(newRevision, now, draft.id, draft.revision, draft.document_id),
+  );
+  const results = await env.DB.batch(statements);
+  const guardResult = results.at(-1);
+  if (guardResult === undefined || guardResult.meta.changes === 0) {
+    conflict("stale_revision", "expected_revision does not match the draft's current revision");
+  }
 
   const importRow: ImportRow = { id: importId, draft_id: draft.id, source_url: sourceUrl, provider, status };
-  return loadImportContract(env, importRow);
+  const updatedDraft = await loadOwnedDraft(env, draft.id, draft.owner_user_id);
+  return {
+    importContract: await loadImportContract(env, importRow),
+    draft: await buildContract(env, updatedDraft),
+  };
 }
 
 export interface ConfirmLinkImportInput {
@@ -186,53 +243,87 @@ export async function confirmLinkImport(env: Env, input: ConfirmLinkImportInput)
     input.candidateIds === null
       ? candidateRows.filter((row) => row.selected === 1)
       : candidateRows.filter((row) => input.candidateIds!.includes(row.id));
+  if (input.candidateIds !== null && wanted.length !== new Set(input.candidateIds).size) {
+    badRequest("invalid_candidate_ids", "candidate_ids must reference candidates from this import");
+  }
 
   const current = (await readDocumentSnapshot(env, draft.document_id)) ?? EMPTY_SNAPSHOT;
+  const governingOrientation = await resolveGoverningOrientation(env, draft, current);
+  if (governingOrientation === null) {
+    badRequest("orientation_required", "orientation must be chosen before confirming imported links");
+  }
+  const capabilities = ORIENTATION_CAPABILITIES[governingOrientation];
+  if (!capabilities.payment && wanted.some((row) => row.link_type === "payment")) {
+    badRequest("payment_links_unavailable", "this orientation does not support payment links");
+  }
   const existingUrls = new Set(current.links.map((link) => link.normalizedUrl));
   const newLinks: DocumentLinkInput[] = [];
   let skippedDuplicateCount = 0;
 
   for (const row of wanted) {
-    if (existingUrls.has(row.normalized_url)) {
+    const publicLabel = row.public_label.trim();
+    if (publicLabel.length === 0 || publicLabel.length > LIMITS.linkLabelMaxChars) {
+      badRequest(
+        "invalid_import_candidate",
+        `imported public_label must be between 1 and ${LIMITS.linkLabelMaxChars} characters`,
+      );
+    }
+    if (row.normalized_url.length > LIMITS.linkUrlMaxChars) {
+      badRequest(
+        "invalid_import_candidate",
+        `imported normalized_url must be at most ${LIMITS.linkUrlMaxChars} characters`,
+      );
+    }
+    const normalizedUrl = validateHttpsUrl(row.normalized_url, "imported normalized_url");
+    if (existingUrls.has(normalizedUrl)) {
       skippedDuplicateCount++;
       continue;
     }
     if (current.links.length + newLinks.length >= LIMITS.linkMaxCount) break;
-    existingUrls.add(row.normalized_url);
+    existingUrls.add(normalizedUrl);
     newLinks.push({
       id: newId(),
       platform: row.platform,
-      publicLabel: row.public_label,
+      publicLabel,
       username: row.username,
-      normalizedUrl: row.normalized_url,
+      normalizedUrl,
       linkType: row.link_type,
       enabled: true,
     });
   }
 
   const newSnapshot: DocumentSnapshot = { ...current, links: [...current.links, ...newLinks] };
+  if (draft.target_scope === "server" && draft.server_mode === "linked") {
+    const resolvedCount = await countResolvedVisibleLinks(env, draft, {
+      localLinks: newSnapshot.links,
+      hiddenInheritedLinkIds: [...newSnapshot.hiddenInheritedLinkIds],
+    });
+    if (resolvedCount > LIMITS.linkMaxCount) {
+      badRequest("too_many_links", `at most ${LIMITS.linkMaxCount} resolved links are allowed`);
+    }
+  }
 
   const now = nowIso();
   const newRevision = draft.revision + 1;
-  const guard = { draftId: draft.id, newRevision };
+  const guard = { draftId: draft.id, expectedRevision: draft.revision };
 
   const statements: D1PreparedStatement[] = [
-    env.DB.prepare("UPDATE profile_drafts SET revision = ?, updated_at = ? WHERE id = ? AND revision = ? AND status = 'active'").bind(
-      newRevision,
-      now,
-      draft.id,
-      draft.revision,
-    ),
     ...buildDocumentWriteStatements(env, draft.document_id, draft.owner_user_id, newSnapshot, now, { isNew: false, guard }),
     // The import and its candidates are scraped, transient staging data; once confirmed (or
     // superseded by this very confirmation), there is no reason to keep holding onto them.
     env.DB.prepare(
       `DELETE FROM profile_link_imports WHERE id = ? AND EXISTS (SELECT 1 FROM profile_drafts WHERE id = ? AND revision = ? AND status = 'active')`,
-    ).bind(importRow.id, draft.id, newRevision),
+    ).bind(importRow.id, draft.id, draft.revision),
+    env.DB.prepare(
+      `UPDATE profile_drafts
+          SET revision = ?, updated_at = ?
+        WHERE id = ? AND revision = ? AND status = 'active'
+          AND EXISTS (SELECT 1 FROM profile_documents WHERE id = ? AND state = 'draft')`,
+    ).bind(newRevision, now, draft.id, draft.revision, draft.document_id),
   ];
 
   const results = await env.DB.batch(statements);
-  const guardResult = results[0];
+  const guardResult = results.at(-1);
   if (guardResult === undefined || guardResult.meta.changes === 0) {
     conflict("stale_revision", "expected_revision does not match the draft's current revision");
   }

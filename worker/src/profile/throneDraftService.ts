@@ -20,9 +20,11 @@ import {
   type DraftRow,
 } from "./draftService.js";
 import {
-  resolveOrAttachThroneCreator,
-  rotateThroneWebhookSecret,
+  buildPreparedCreatorStatements,
+  prepareThroneCreatorAttachment,
+  prepareWebhookSecret,
   ThroneResolutionError,
+  type SqlMutationGuard,
   type WebhookState,
 } from "../throne/creatorService.js";
 
@@ -53,28 +55,59 @@ async function loadMutableDraft(
   return { draft, current, governingOrientation };
 }
 
+function draftMutationGuard(draft: DraftRow): SqlMutationGuard {
+  return {
+    sql: `EXISTS (
+      SELECT 1
+        FROM profile_drafts d
+        JOIN profile_documents p ON p.id = d.document_id
+       WHERE d.id = ? AND d.revision = ? AND d.status = 'active'
+         AND d.document_id = ? AND p.state = 'draft'
+    )`,
+    params: [draft.id, draft.revision, draft.document_id],
+  };
+}
+
+function isConstraintError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /constraint failed/i.test(message);
+}
+
 /** Bumps the draft's revision under the standard compare-and-swap and returns the refreshed
  * contract; used both when the document actually changes (attach) and when it does not
  * (rotate-only), so every Throne mutation advances the same optimistic-concurrency counter. */
-async function bumpRevisionAndReturn(env: Env, draft: DraftRow, newSnapshot: DocumentSnapshot | null): Promise<DraftContract> {
+async function bumpRevisionAndReturn(
+  env: Env,
+  draft: DraftRow,
+  newSnapshot: DocumentSnapshot | null,
+  prefixStatements: readonly D1PreparedStatement[] = [],
+): Promise<DraftContract> {
   const now = nowIso();
   const newRevision = draft.revision + 1;
-  const guard = { draftId: draft.id, newRevision };
+  const guard = { draftId: draft.id, expectedRevision: draft.revision };
 
-  const statements: D1PreparedStatement[] = [
-    env.DB.prepare("UPDATE profile_drafts SET revision = ?, updated_at = ? WHERE id = ? AND revision = ? AND status = 'active'").bind(
-      newRevision,
-      now,
-      draft.id,
-      draft.revision,
-    ),
-  ];
+  const statements: D1PreparedStatement[] = [...prefixStatements];
   if (newSnapshot !== null) {
     statements.push(...buildDocumentWriteStatements(env, draft.document_id, draft.owner_user_id, newSnapshot, now, { isNew: false, guard }));
   }
 
-  const results = await env.DB.batch(statements);
-  const guardResult = results[0];
+  statements.push(
+    env.DB.prepare(
+      `UPDATE profile_drafts
+          SET revision = ?, updated_at = ?
+        WHERE id = ? AND revision = ? AND status = 'active'
+          AND EXISTS (SELECT 1 FROM profile_documents WHERE id = ? AND state = 'draft')`,
+    ).bind(newRevision, now, draft.id, draft.revision, draft.document_id),
+  );
+
+  let results: D1Result[];
+  try {
+    results = await env.DB.batch(statements);
+  } catch (error) {
+    if (!isConstraintError(error)) throw error;
+    conflict("throne_attach_conflict", "the Throne connection changed; reload the draft and try again");
+  }
+  const guardResult = results.at(-1);
   if (guardResult === undefined || guardResult.meta.changes === 0) {
     conflict("stale_revision", "expected_revision does not match the draft's current revision");
   }
@@ -120,6 +153,8 @@ export async function attachThroneToDraft(env: Env, input: AttachThroneInput): P
   let creatorId: string;
   let webhookUrl: string | null = null;
   let webhookState: WebhookState | "unchanged" = "unchanged";
+  let creatorStatements: D1PreparedStatement[] = [];
+  const mutationGuard = draftMutationGuard(draft);
 
   if (input.existingCreatorId !== null) {
     const owned = await env.DB.prepare("SELECT id FROM throne_creators WHERE id = ? AND owner_discord_user_id = ?")
@@ -128,27 +163,44 @@ export async function attachThroneToDraft(env: Env, input: AttachThroneInput): P
     if (!owned) badRequest("throne_creator_not_owned", "that Throne creator is not owned by this user");
     creatorId = input.existingCreatorId;
     if (input.rotateWebhook) {
-      const rotated = await rotateThroneWebhookSecret(env, creatorId);
+      const rotated = await prepareWebhookSecret(env, creatorId);
       webhookUrl = rotated.webhookUrl;
       webhookState = "rotated";
+      creatorStatements = [
+        env.DB.prepare(
+          `UPDATE throne_creators
+              SET route_secret_hash = ?, updated_at = ?
+            WHERE id = ? AND owner_discord_user_id = ? AND ${mutationGuard.sql}`,
+        ).bind(
+          rotated.routeSecretHash,
+          nowIso(),
+          creatorId,
+          draft.owner_user_id,
+          ...mutationGuard.params,
+        ),
+      ];
     }
   } else {
-    let attached;
+    let prepared;
     try {
-      attached = await resolveOrAttachThroneCreator(env, draft.owner_user_id, input.throneInput as string, {
-        rotateWebhook: input.rotateWebhook,
-      });
+      prepared = await prepareThroneCreatorAttachment(
+        env,
+        draft.owner_user_id,
+        input.throneInput as string,
+        { rotateWebhook: input.rotateWebhook },
+      );
     } catch (error) {
       if (error instanceof ThroneResolutionError) badRequest(error.code, error.message);
       throw error;
     }
-    creatorId = attached.creatorId;
-    webhookUrl = attached.webhookUrl;
-    webhookState = attached.webhookState;
+    creatorId = prepared.creatorId;
+    webhookUrl = prepared.webhookUrl;
+    webhookState = prepared.webhookState;
+    creatorStatements = buildPreparedCreatorStatements(env, prepared, mutationGuard);
   }
 
   const newSnapshot: DocumentSnapshot = { ...current, throneCreatorId: creatorId };
-  const contract = await bumpRevisionAndReturn(env, draft, newSnapshot);
+  const contract = await bumpRevisionAndReturn(env, draft, newSnapshot, creatorStatements);
   return { draft: contract, webhookUrl, webhookState };
 }
 
@@ -176,9 +228,22 @@ export async function rotateDraftThroneWebhook(env: Env, input: RotateThroneInpu
     .first();
   if (!owned) badRequest("throne_creator_not_owned", "that Throne creator is not owned by this user");
 
-  // The compare-and-swap below is the real gate: rotation only actually happens once it lands,
-  // so a stale/racing request can never rotate a live secret out from under a winning request.
-  const contract = await bumpRevisionAndReturn(env, draft, null);
-  const rotated = await rotateThroneWebhookSecret(env, current.throneCreatorId);
+  const rotated = await prepareWebhookSecret(env, current.throneCreatorId);
+  const mutationGuard = draftMutationGuard(draft);
+  const rotateStatement = env.DB.prepare(
+    `UPDATE throne_creators
+        SET route_secret_hash = ?, updated_at = ?
+      WHERE id = ? AND owner_discord_user_id = ? AND ${mutationGuard.sql}`,
+  ).bind(
+    rotated.routeSecretHash,
+    nowIso(),
+    current.throneCreatorId,
+    draft.owner_user_id,
+    ...mutationGuard.params,
+  );
+  // Secret rotation and the draft CAS share one D1 batch. A stale caller's
+  // guarded creator update is a no-op, so it can never invalidate the URL
+  // belonging to the winning request.
+  const contract = await bumpRevisionAndReturn(env, draft, null, [rotateStatement]);
   return { draft: contract, webhookUrl: rotated.webhookUrl, webhookState: "rotated" };
 }

@@ -179,13 +179,17 @@ export function validateCandidateUrl(rawUrl: string): URL {
  * is exercised in tests the same way any other Worker outbound fetch is: an injectable HTTP call,
  * not a native DNS API workerd doesn't expose to user code). Returns the resolved IP address
  * strings, or an empty array if resolution fails/returns nothing. */
-export async function resolveHostnameIpsViaDoh(hostname: string, fetchImpl: typeof fetch): Promise<string[]> {
+export async function resolveHostnameIpsViaDoh(
+  hostname: string,
+  fetchImpl: typeof fetch,
+  signal?: AbortSignal,
+): Promise<string[]> {
   const addresses: string[] = [];
   for (const type of ["A", "AAAA"] as const) {
     try {
       const response = await fetchImpl(
         `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=${type}`,
-        { headers: { accept: "application/dns-json" } },
+        { headers: { accept: "application/dns-json" }, signal: signal ?? null },
       );
       if (!response.ok) continue;
       const body = (await response.json()) as { Answer?: { type: number; data: string }[] };
@@ -202,13 +206,17 @@ export async function resolveHostnameIpsViaDoh(hostname: string, fetchImpl: type
 }
 
 export interface DnsResolver {
-  (hostname: string): Promise<string[]>;
+  (hostname: string, signal?: AbortSignal): Promise<string[]>;
 }
 
 /** Resolves `hostname` and rejects unless every returned address is a public, non-internal IP.
  * Must be called for the initial URL and again for every redirect hop's new hostname. */
-export async function preflightDns(hostname: string, resolveIps: DnsResolver): Promise<void> {
-  const addresses = await resolveIps(hostname);
+export async function preflightDns(
+  hostname: string,
+  resolveIps: DnsResolver,
+  signal?: AbortSignal,
+): Promise<void> {
+  const addresses = await resolveIps(hostname, signal);
   if (addresses.length === 0) blocked("dns_resolution_failed", "could not resolve that host");
   for (const address of addresses) {
     if (isBlockedIpAddress(address)) blocked("blocked_destination", "that host resolves to a disallowed address");

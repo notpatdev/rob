@@ -107,7 +107,13 @@ export async function handleCreateLinkImport(ctx: RouteContext): Promise<Respons
     }),
   );
   if (!result.ok) return result.response;
-  return ok({ import: serializeImportContract(result.value) }, 201);
+  return ok(
+    {
+      import: serializeImportContract(result.value.importContract),
+      draft: serializeDraftContract(result.value.draft),
+    },
+    201,
+  );
 }
 
 /** `POST /v1/profile-drafts/:draftId/link-imports/:importId/confirm` -- "Looks Good!": promote

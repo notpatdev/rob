@@ -65,6 +65,56 @@ async function lookup(guildId: string, userId: string) {
 }
 
 describe("profile draft lifecycle (global scope, domme orientation)", () => {
+  it("persists partial identity selections without completing the step", async () => {
+    const owner = "500000000000000090";
+    const started = await startDraft({
+      owner_user_id: owner,
+      origin_guild_id: TEST_HOME_GUILD_ID,
+      target_scope: "global",
+    });
+    const draftId = started.draft.id;
+    await putStep(draftId, "orientation", {
+      owner_user_id: owner,
+      expected_revision: 0,
+      orientation: "domme",
+    });
+
+    const partial = await putStep(draftId, "identity", {
+      owner_user_id: owner,
+      expected_revision: 1,
+      complete: false,
+      pronouns: ["She/Her"],
+      honourifics: [],
+      submissive_labels: [],
+      dm_status: "open",
+      bio: null,
+      public_send_stats: false,
+      aliases: [],
+    });
+    expect(partial.status).toBe(200);
+    expect(partial.draft?.revision).toBe(2);
+    expect(partial.draft?.next_step).toBe("identity");
+    expect(partial.draft?.steps.find((step) => step.key === "identity")?.status).toBe("pending");
+    expect(partial.draft?.document.selections).toEqual({
+      pronouns: ["She/Her"],
+      honourifics: [],
+      submissive_labels: [],
+    });
+
+    const completed = await putStep(draftId, "identity", {
+      owner_user_id: owner,
+      expected_revision: 2,
+      pronouns: ["She/Her"],
+      honourifics: [],
+      submissive_labels: [],
+      dm_status: "open",
+      bio: null,
+      public_send_stats: false,
+      aliases: [],
+    });
+    expect(completed.draft?.next_step).toBe("links");
+  });
+
   it("runs the full start -> steps -> publish -> lookup cycle", async () => {
     const started = await startDraft({
       owner_user_id: OWNER,
@@ -147,6 +197,18 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
     expect(looked.profile?.bio).toBe("Hello there");
     expect(looked.profile?.preferred_payment_link_id).toBe(linkId);
 
+    const edit = await startDraft({
+      owner_user_id: OWNER,
+      origin_guild_id: TEST_HOME_GUILD_ID,
+      target_scope: "global",
+    });
+    expect(edit.status).toBe(200);
+    expect(edit.resume_required).toBe(false);
+    const clonedLinks = edit.draft.document.links as { id: string; normalized_url: string }[];
+    expect(clonedLinks).toHaveLength(2);
+    expect(clonedLinks.map((link) => link.id)).not.toContain(linkId);
+    expect(clonedLinks.map((link) => link.normalized_url)).toContain("https://cash.app/$example");
+
     // The draft is no longer active; further mutation must be refused.
     const stalePut = await putStep(draftId, "review", { owner_user_id: OWNER, expected_revision: 5 });
     expect(stalePut.status).toBe(409);
@@ -209,6 +271,48 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
     });
     expect(result.status).toBe(409);
     expect(result.error?.code).toBe("stale_revision");
+  });
+
+  it("never mutates a document after it has left draft state", async () => {
+    const owner = "500000000000000019";
+    const started = await startDraft({
+      owner_user_id: owner,
+      origin_guild_id: TEST_HOME_GUILD_ID,
+      target_scope: "global",
+    });
+    const afterOrientation = await putStep(started.draft.id, "orientation", {
+      owner_user_id: owner,
+      expected_revision: 0,
+      orientation: "domme",
+    });
+    expect(afterOrientation.status).toBe(200);
+
+    await env.DB.prepare(
+      `UPDATE profile_documents
+          SET state = 'published'
+        WHERE id = (SELECT document_id FROM profile_drafts WHERE id = ?)`,
+    )
+      .bind(started.draft.id)
+      .run();
+
+    const result = await putStep(started.draft.id, "identity", {
+      owner_user_id: owner,
+      expected_revision: 1,
+      dm_status: "open",
+      bio: "must not be written",
+    });
+    expect(result.status).toBe(409);
+    expect(result.error?.code).toBe("stale_revision");
+
+    const row = await env.DB.prepare(
+      `SELECT d.revision, p.state, p.bio
+         FROM profile_drafts d
+         JOIN profile_documents p ON p.id = d.document_id
+        WHERE d.id = ?`,
+    )
+      .bind(started.draft.id)
+      .first<{ revision: number; state: string; bio: string | null }>();
+    expect(row).toEqual({ revision: 1, state: "published", bio: null });
   });
 
   it("submissive orientation has no throne step and rejects throne step mutation", async () => {
@@ -308,6 +412,83 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
       .bind(owner)
       .first<{ count: number }>();
     expect(publicationCount?.count).toBe(1);
+  });
+
+  it("does not let a stale draft overwrite a root published after the draft started", async () => {
+    const owner = "500000000000000018";
+    const started = await startDraft({
+      owner_user_id: owner,
+      origin_guild_id: TEST_HOME_GUILD_ID,
+      target_scope: "global",
+    });
+    const draftId = started.draft.id;
+    await putStep(draftId, "orientation", {
+      owner_user_id: owner,
+      expected_revision: 0,
+      orientation: "domme",
+    });
+    await putStep(draftId, "identity", {
+      owner_user_id: owner,
+      expected_revision: 1,
+      dm_status: "open",
+    });
+    await putStep(draftId, "links", {
+      owner_user_id: owner,
+      expected_revision: 2,
+      links: [],
+    });
+    await putStep(draftId, "throne", {
+      owner_user_id: owner,
+      expected_revision: 3,
+      throne_creator_id: null,
+      preferred_payment_link_id: null,
+    });
+    await putStep(draftId, "review", {
+      owner_user_id: owner,
+      expected_revision: 4,
+    });
+
+    const newerDocumentId = "newer-published-document";
+    const now = new Date().toISOString();
+    await env.DB.batch([
+      env.DB
+        .prepare(
+          `INSERT INTO profile_documents
+             (id, owner_user_id, state, orientation, dm_status, created_at, updated_at)
+           VALUES (?, ?, 'published', 'domme', 'closed', ?, ?)`,
+        )
+        .bind(newerDocumentId, owner, now, now),
+      env.DB
+        .prepare(
+          `INSERT INTO global_profiles
+             (owner_user_id, current_document_id, version, published_at, created_at, updated_at)
+           VALUES (?, ?, 1, ?, ?, ?)`,
+        )
+        .bind(owner, newerDocumentId, now, now, now),
+    ]);
+
+    const result = await publish(draftId, {
+      owner_user_id: owner,
+      expected_revision: 5,
+    });
+    expect(result.status).toBe(409);
+    expect(result.error?.code).toBe("publish_conflict");
+
+    const root = await env.DB.prepare(
+      "SELECT current_document_id, version FROM global_profiles WHERE owner_user_id = ?",
+    )
+      .bind(owner)
+      .first<{ current_document_id: string; version: number }>();
+    expect(root).toEqual({ current_document_id: newerDocumentId, version: 1 });
+
+    const staleDocument = await env.DB.prepare(
+      `SELECT state
+         FROM profile_documents
+        WHERE id = (SELECT document_id FROM profile_drafts WHERE id = ?)`,
+    )
+      .bind(draftId)
+      .first<{ state: string }>();
+    expect(staleDocument?.state).toBe("draft");
   });
 });
 

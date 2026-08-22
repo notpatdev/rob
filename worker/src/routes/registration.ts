@@ -56,15 +56,18 @@ export async function handleRegisterDomme(ctx: RouteContext): Promise<Response> 
   // in place. Both uniqueness constraints get their own ON CONFLICT clause
   // so SQLite picks whichever one the actual violation matches.
   await ctx.env.DB.prepare(
-    `INSERT INTO domme_registrations (id, guild_id, creator_id, discord_user_id, active, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 1, ?, ?)
+    `INSERT INTO domme_registrations
+       (id, guild_id, creator_id, discord_user_id, active, profile_managed, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 1, 0, ?, ?)
      ON CONFLICT (guild_id, discord_user_id) DO UPDATE SET
        creator_id = excluded.creator_id,
        active = 1,
+       profile_managed = 0,
        updated_at = excluded.updated_at
      ON CONFLICT (guild_id, creator_id) DO UPDATE SET
        discord_user_id = excluded.discord_user_id,
        active = 1,
+       profile_managed = 0,
        updated_at = excluded.updated_at`,
   )
     .bind(newId(), guildId, attached.creatorId, discordUserId, now, now)

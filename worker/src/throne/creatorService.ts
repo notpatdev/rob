@@ -44,20 +44,37 @@ export interface ThroneAttachResult {
   readonly webhookState: WebhookState;
 }
 
+export interface PreparedThroneAttachment extends ThroneAttachResult {
+  readonly publicCreatorId: string;
+  readonly profileUrl: string;
+  readonly ownerUserId: string;
+  readonly existing: boolean;
+  readonly routeSecretHash: string | null;
+}
+
+export interface PreparedWebhookSecret {
+  readonly creatorId: string;
+  readonly routeSecretHash: string;
+  readonly webhookUrl: string;
+}
+
+export interface SqlMutationGuard {
+  readonly sql: string;
+  readonly params: readonly unknown[];
+}
+
 /**
- * Resolves `rawThroneInput` (a Throne username or profile URL) to a public
- * Throne creator, then creates a brand-new `throne_creators` row for it (if
- * one does not already exist) or reuses/rotates the existing one already
- * owned by `ownerUserId`. Throws `ThroneResolutionError` (never a bare
- * `Error`) for every caller-facing failure so route handlers can map its
- * `code` to the right HTTP status.
+ * Performs network resolution and prepares secret material without writing D1.
+ * Profile drafts use the returned values to put the creator mutation and their
+ * revision CAS in one guarded batch; the legacy API executes the same prepared
+ * statement immediately.
  */
-export async function resolveOrAttachThroneCreator(
+export async function prepareThroneCreatorAttachment(
   env: Env,
   ownerUserId: string,
   rawThroneInput: string,
   options: { rotateWebhook: boolean },
-): Promise<ThroneAttachResult> {
+): Promise<PreparedThroneAttachment> {
   const normalized = normalizeThroneInput(rawThroneInput);
   if (!normalized) {
     throw new ThroneResolutionError("invalid_throne_input", "throne must be a Throne username or profile URL");
@@ -68,7 +85,6 @@ export async function resolveOrAttachThroneCreator(
     throw new ThroneResolutionError("throne_creator_not_found", "Could not resolve that Throne creator");
   }
 
-  const now = nowIso();
   const existing = await env.DB.prepare(
     "SELECT id, public_creator_id, handle, owner_discord_user_id FROM throne_creators WHERE public_creator_id = ?",
   )
@@ -85,49 +101,145 @@ export async function resolveOrAttachThroneCreator(
   let creatorId: string;
   let webhookUrl: string | null = null;
   let webhookState: WebhookState;
+  let routeSecretHash: string | null = null;
 
   if (!existing) {
     creatorId = newId();
     const secret = newRouteSecret();
-    const secretHash = await sha256Hex(secret);
-    await env.DB.prepare(
-      `INSERT INTO throne_creators
-         (id, public_creator_id, handle, profile_url, route_secret_hash, owner_discord_user_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-      .bind(creatorId, resolved.publicCreatorId, resolved.handle, normalized.profileUrl, secretHash, ownerUserId, now, now)
-      .run();
+    routeSecretHash = await sha256Hex(secret);
     webhookUrl = buildWebhookUrl(env.PUBLIC_BASE_URL, creatorId, secret);
     webhookState = "issued";
   } else {
     creatorId = existing.id;
-    // Keep the cached handle/profile URL fresh; this never touches the secret.
-    await env.DB.prepare("UPDATE throne_creators SET handle = ?, profile_url = ?, updated_at = ? WHERE id = ?")
-      .bind(resolved.handle, normalized.profileUrl, now, creatorId)
-      .run();
-
     if (options.rotateWebhook) {
-      const rotated = await rotateThroneWebhookSecret(env, creatorId);
+      const rotated = await prepareWebhookSecret(env, creatorId);
       webhookUrl = rotated.webhookUrl;
+      routeSecretHash = rotated.routeSecretHash;
       webhookState = "rotated";
     } else {
       webhookState = "existing";
     }
   }
 
-  return { creatorId, handle: resolved.handle, webhookUrl, webhookState };
+  return {
+    creatorId,
+    handle: resolved.handle,
+    webhookUrl,
+    webhookState,
+    publicCreatorId: resolved.publicCreatorId,
+    profileUrl: normalized.profileUrl,
+    ownerUserId,
+    existing: existing !== null,
+    routeSecretHash,
+  };
+}
+
+export function buildPreparedCreatorStatements(
+  env: Env,
+  prepared: PreparedThroneAttachment,
+  guard: SqlMutationGuard | null = null,
+): D1PreparedStatement[] {
+  const now = nowIso();
+  if (!prepared.existing) {
+    const where = guard === null ? "" : ` WHERE ${guard.sql}`;
+    return [
+      env.DB.prepare(
+        `INSERT INTO throne_creators
+           (id, public_creator_id, handle, profile_url, route_secret_hash,
+            owner_discord_user_id, created_at, updated_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?${where}`,
+      ).bind(
+        prepared.creatorId,
+        prepared.publicCreatorId,
+        prepared.handle,
+        prepared.profileUrl,
+        prepared.routeSecretHash,
+        prepared.ownerUserId,
+        now,
+        now,
+        ...(guard?.params ?? []),
+      ),
+    ];
+  }
+
+  const guardSuffix = guard === null ? "" : ` AND ${guard.sql}`;
+  if (prepared.routeSecretHash !== null) {
+    return [
+      env.DB.prepare(
+        `UPDATE throne_creators
+            SET handle = ?, profile_url = ?, route_secret_hash = ?, updated_at = ?
+          WHERE id = ? AND owner_discord_user_id = ?${guardSuffix}`,
+      ).bind(
+        prepared.handle,
+        prepared.profileUrl,
+        prepared.routeSecretHash,
+        now,
+        prepared.creatorId,
+        prepared.ownerUserId,
+        ...(guard?.params ?? []),
+      ),
+    ];
+  }
+  return [
+    env.DB.prepare(
+      `UPDATE throne_creators
+          SET handle = ?, profile_url = ?, updated_at = ?
+        WHERE id = ? AND owner_discord_user_id = ?${guardSuffix}`,
+    ).bind(
+      prepared.handle,
+      prepared.profileUrl,
+      now,
+      prepared.creatorId,
+      prepared.ownerUserId,
+      ...(guard?.params ?? []),
+    ),
+  ];
+}
+
+export async function resolveOrAttachThroneCreator(
+  env: Env,
+  ownerUserId: string,
+  rawThroneInput: string,
+  options: { rotateWebhook: boolean },
+): Promise<ThroneAttachResult> {
+  const prepared = await prepareThroneCreatorAttachment(env, ownerUserId, rawThroneInput, options);
+  const results = await env.DB.batch(buildPreparedCreatorStatements(env, prepared));
+  if (results[0]?.meta.changes !== 1) {
+    throw new ThroneResolutionError("creator_conflict", "The Throne creator changed while it was being linked");
+  }
+  return {
+    creatorId: prepared.creatorId,
+    handle: prepared.handle,
+    webhookUrl: prepared.webhookUrl,
+    webhookState: prepared.webhookState,
+  };
+}
+
+export async function prepareWebhookSecret(
+  env: Env,
+  creatorId: string,
+): Promise<PreparedWebhookSecret> {
+  const secret = newRouteSecret();
+  return {
+    creatorId,
+    routeSecretHash: await sha256Hex(secret),
+    webhookUrl: buildWebhookUrl(env.PUBLIC_BASE_URL, creatorId, secret),
+  };
 }
 
 /** Rotates an existing creator's webhook secret unconditionally, returning the new (one-time
  * visible) webhook URL. Ownership must already have been checked by the caller. */
 export async function rotateThroneWebhookSecret(env: Env, creatorId: string): Promise<{ webhookUrl: string }> {
-  const secret = newRouteSecret();
-  const secretHash = await sha256Hex(secret);
-  const now = nowIso();
-  await env.DB.prepare("UPDATE throne_creators SET route_secret_hash = ?, updated_at = ? WHERE id = ?")
-    .bind(secretHash, now, creatorId)
+  const prepared = await prepareWebhookSecret(env, creatorId);
+  const result = await env.DB.prepare(
+    "UPDATE throne_creators SET route_secret_hash = ?, updated_at = ? WHERE id = ?",
+  )
+    .bind(prepared.routeSecretHash, nowIso(), creatorId)
     .run();
-  return { webhookUrl: buildWebhookUrl(env.PUBLIC_BASE_URL, creatorId, secret) };
+  if (result.meta.changes !== 1) {
+    throw new ThroneResolutionError("throne_creator_not_found", "Could not find that Throne creator");
+  }
+  return { webhookUrl: prepared.webhookUrl };
 }
 
 /** Maps a `ThroneResolutionError` code to the HTTP status the legacy `/register` route and the

@@ -19,6 +19,17 @@ ALTER TABLE sends ADD COLUMN sender_discord_user_id TEXT;
 
 CREATE INDEX idx_sends_guild_sender ON sends (guild_id, sender_discord_user_id);
 
+-- Distinguishes registrations materialized by profile publication from v1
+-- registrations created explicitly through the legacy API. Profile-managed
+-- rows can be deactivated when a profile disconnects Throne; legacy rows must
+-- remain untouched for rollout compatibility.
+ALTER TABLE domme_registrations
+  ADD COLUMN profile_managed INTEGER NOT NULL DEFAULT 0
+  CHECK (profile_managed IN (0, 1));
+
+CREATE INDEX idx_domme_registrations_profile_managed
+  ON domme_registrations (guild_id, discord_user_id, profile_managed);
+
 -- One link-page import attempt for a draft's links step: `source_url` is
 -- the page the caller asked to import, `provider` records which adapter
 -- handled it ("linktree"/"allmylinks"/"beacons"/"generic"), and `status`

@@ -19,7 +19,12 @@ import { LIMITS, ORIENTATION_CAPABILITIES, stepsForDraft, type StepKey } from ".
 import { readDocumentSnapshot } from "./documentStore.js";
 import { resolveProfile, type ResolvedProfile } from "./resolver.js";
 import { DraftError } from "./draftService.js";
-import { syncRegistrationForGuild, syncRegistrationsAfterGlobalPublish } from "./registrationSync.js";
+import {
+  buildRegistrationProjectionStatements,
+  collectPublishRegistrationProjections,
+  hasLegacyRegistrationConflict,
+  legacyRegistrationConflictGuard,
+} from "./registrationSync.js";
 
 interface DraftRow {
   id: string;
@@ -29,6 +34,7 @@ interface DraftRow {
   guild_id: string | null;
   server_mode: "linked" | "independent" | null;
   document_id: string;
+  base_version: number;
   status: "active" | "published";
   revision: number;
 }
@@ -41,6 +47,11 @@ function conflict(code: string, message: string): never {
 }
 function badRequest(code: string, message: string): never {
   throw new DraftError(400, code, message);
+}
+
+function isConstraintError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /constraint failed/i.test(message);
 }
 
 async function loadOwnedActiveDraft(env: Env, draftId: string, ownerUserId: string): Promise<DraftRow> {
@@ -67,6 +78,7 @@ export async function publishDraft(env: Env, input: PublishDraftInput): Promise<
 
   const linked = draft.target_scope === "server" && draft.server_mode === "linked";
   let governingOrientation = snapshot.orientation;
+  let governingCreatorId = snapshot.throneCreatorId;
   if (linked) {
     const globalRoot = await env.DB.prepare("SELECT current_document_id FROM global_profiles WHERE owner_user_id = ?")
       .bind(draft.owner_user_id)
@@ -76,6 +88,7 @@ export async function publishDraft(env: Env, input: PublishDraftInput): Promise<
     }
     const globalSnapshot = await readDocumentSnapshot(env, globalRoot.current_document_id);
     governingOrientation = globalSnapshot?.orientation ?? null;
+    governingCreatorId = globalSnapshot?.throneCreatorId ?? null;
   }
   if (governingOrientation === null) {
     badRequest("orientation_required", "orientation must be chosen before publishing");
@@ -107,10 +120,26 @@ export async function publishDraft(env: Env, input: PublishDraftInput): Promise<
     if (paymentLinks.length > 0 && !caps.payment) {
       badRequest("payment_links_unavailable", "this orientation does not support payment links");
     }
+
     if (snapshot.links.length > LIMITS.linkMaxCount) {
       badRequest("too_many_links", `at most ${LIMITS.linkMaxCount} links are allowed`);
     }
   }
+
+  const registrationProjections = await collectPublishRegistrationProjections(env, {
+    targetScope: draft.target_scope,
+    guildId: draft.guild_id,
+    serverMode: draft.server_mode,
+    ownerUserId: draft.owner_user_id,
+    creatorId: governingCreatorId,
+  });
+  if (await hasLegacyRegistrationConflict(env, registrationProjections)) {
+    conflict(
+      "legacy_registration_conflict",
+      "an explicit v1 Throne registration conflicts with this profile; resolve it before publishing",
+    );
+  }
+  const legacyGuard = legacyRegistrationConflictGuard(registrationProjections);
 
   const now = nowIso();
   const isGlobal = draft.target_scope === "global";
@@ -128,13 +157,29 @@ export async function publishDraft(env: Env, input: PublishDraftInput): Promise<
         .bind(draft.guild_id, draft.owner_user_id)
         .first<{ current_document_id: string; version: number }>();
 
-  const oldVersion = rootRow?.version ?? 0;
-  const newVersion = oldVersion + 1;
+  // The draft's captured base version is the publication CAS. Reading the
+  // root's current version here and then using that as the expected value
+  // would let an old draft overwrite a publication that landed after the
+  // draft started.
+  const oldVersion = draft.base_version;
+  const newVersion = draft.base_version + 1;
   const oldDocumentId = rootRow?.current_document_id ?? null;
   const newDocumentId = draft.document_id;
 
-  const existsGuardSql = `EXISTS (SELECT 1 FROM ${rootTable} WHERE ${rootKeyWhereSql} AND version = ? AND current_document_id = ?)`;
-  const existsGuardParams = [...rootKeyParams, newVersion, newDocumentId];
+  const newDraftRevision = draft.revision + 1;
+  const publishedDraftGuardSql =
+    "EXISTS (SELECT 1 FROM profile_drafts WHERE id = ? AND revision = ? AND status = 'published')";
+  const publishedDraftGuardParams = [draft.id, newDraftRevision];
+  const publishedRootGuardSql = `EXISTS (SELECT 1 FROM ${rootTable} WHERE ${rootKeyWhereSql} AND version = ? AND current_document_id = ?)`;
+  const publishedRootGuardParams = [...rootKeyParams, newVersion, newDocumentId];
+  const publishGuardSql = `${publishedDraftGuardSql} AND ${publishedRootGuardSql}`;
+  const publishGuardParams = [...publishedDraftGuardParams, ...publishedRootGuardParams];
+
+  const baseRootGuardSql =
+    oldVersion === 0
+      ? `NOT EXISTS (SELECT 1 FROM ${rootTable} WHERE ${rootKeyWhereSql})`
+      : `EXISTS (SELECT 1 FROM ${rootTable} WHERE ${rootKeyWhereSql} AND version = ?)`;
+  const baseRootGuardParams = oldVersion === 0 ? rootKeyParams : [...rootKeyParams, oldVersion];
 
   const rootUpsertStatement = isGlobal
     ? env.DB.prepare(
@@ -171,59 +216,93 @@ export async function publishDraft(env: Env, input: PublishDraftInput): Promise<
       );
 
   const statements: D1PreparedStatement[] = [
-    rootUpsertStatement,
-    env.DB.prepare(`UPDATE profile_documents SET state = 'published', updated_at = ? WHERE id = ? AND state = 'draft' AND ${existsGuardSql}`).bind(
-      now,
-      newDocumentId,
-      ...existsGuardParams,
-    ),
-  ];
-
-  if (oldDocumentId !== null) {
-    statements.push(
-      env.DB.prepare(
-        `UPDATE profile_documents SET state = 'superseded', updated_at = ? WHERE id = ? AND state = 'published' AND ${existsGuardSql}`,
-      ).bind(now, oldDocumentId, ...existsGuardParams),
-    );
-  }
-
-  statements.push(
     env.DB.prepare(
-      `INSERT INTO profile_publications (id, profile_kind, owner_user_id, guild_id, version, document_id, published_at)
-       SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${existsGuardSql}`,
+      `UPDATE profile_drafts
+          SET status = 'published', revision = ?, published_at = ?, updated_at = ?
+      WHERE id = ? AND revision = ? AND status = 'active'
+        AND EXISTS (SELECT 1 FROM profile_documents WHERE id = ? AND state = 'draft')`,
+    ).bind(newDraftRevision, now, now, draft.id, draft.revision, draft.document_id),
+    // A zero-row CAS is not an error in SQLite. Feeding its guarded scalar
+    // result into the NOT NULL document_id column converts a stale draft/root
+    // into a real constraint failure, which makes D1 roll back this whole
+    // batch instead of leaving either side half-published.
+    env.DB.prepare(
+      `INSERT INTO profile_publications
+         (id, profile_kind, owner_user_id, guild_id, version, document_id, published_at)
+       VALUES (
+         ?, ?, ?, ?, ?,
+         (SELECT document_id
+            FROM profile_drafts
+           WHERE id = ? AND revision = ? AND status = 'published'
+             AND document_id = ? AND ${baseRootGuardSql} AND ${legacyGuard.sql}),
+         ?
+       )`,
     ).bind(
       newId(),
       isGlobal ? "global" : "server",
       draft.owner_user_id,
       draft.guild_id,
       newVersion,
+      draft.id,
+      newDraftRevision,
       newDocumentId,
+      ...baseRootGuardParams,
+      ...legacyGuard.params,
       now,
-      ...existsGuardParams,
     ),
-  );
+    rootUpsertStatement,
+    env.DB.prepare(
+      `UPDATE profile_documents
+          SET state = 'published', updated_at = ?
+        WHERE id = ? AND state = 'draft' AND ${publishGuardSql}`,
+    ).bind(now, newDocumentId, ...publishGuardParams),
+  ];
+
+  if (oldDocumentId !== null) {
+    statements.push(
+      env.DB.prepare(
+        `UPDATE profile_documents
+            SET state = 'superseded', updated_at = ?
+          WHERE id = ? AND state = 'published' AND ${publishGuardSql}`,
+      ).bind(now, oldDocumentId, ...publishGuardParams),
+    );
+  }
 
   statements.push(
-    env.DB.prepare(
-      `UPDATE profile_drafts SET status = 'published', revision = revision + 1, published_at = ?, updated_at = ?
-       WHERE id = ? AND revision = ? AND status = 'active' AND ${existsGuardSql}`,
-    ).bind(now, now, draft.id, draft.revision, ...existsGuardParams),
+    ...buildRegistrationProjectionStatements(env, registrationProjections, {
+      sql: publishGuardSql,
+      params: publishGuardParams,
+    }),
   );
 
   let results: D1Result[];
   try {
     results = await env.DB.batch(statements);
-  } catch {
+  } catch (error) {
+    if (!isConstraintError(error)) throw error;
+    if (await hasLegacyRegistrationConflict(env, registrationProjections)) {
+      conflict(
+        "legacy_registration_conflict",
+        "an explicit v1 Throne registration conflicts with this profile; resolve it before publishing",
+      );
+    }
     // A genuinely concurrent publish of this same draft can race past the
-    // soft EXISTS guards above (both racers may compute the identical
-    // target version/document, since they're publishing the same draft);
-    // `profile_publications`'s UNIQUE(document_id) constraint is the hard
-    // backstop that turns that race into a real, batch-aborting error for
-    // whichever request loses, instead of a duplicated history row.
+    // initial read. The guarded NOT NULL publication insert and the unique
+    // document history constraint turn every losing path into a real,
+    // batch-aborting error instead of a partial state change.
     conflict("publish_conflict", "the profile changed underneath this draft; reload and try again");
   }
-  const rootResult = results[0];
-  if (rootResult === undefined || rootResult.meta.changes === 0) {
+  const draftResult = results[0];
+  const publicationResult = results[1];
+  const rootResult = results[2];
+  if (
+    draftResult === undefined ||
+    draftResult.meta.changes === 0 ||
+    publicationResult === undefined ||
+    publicationResult.meta.changes === 0 ||
+    rootResult === undefined ||
+    rootResult.meta.changes === 0
+  ) {
     conflict("publish_conflict", "the profile changed underneath this draft; reload and try again");
   }
 
@@ -232,22 +311,6 @@ export async function publishDraft(env: Env, input: PublishDraftInput): Promise<
   if (profile === null) {
     // Should be unreachable given the CAS above succeeded, but fail loudly rather than lie.
     throw new DraftError(500, "publish_resolution_failed", "Published successfully but could not resolve the new profile");
-  }
-
-  // Bridge into the legacy `domme_registrations` projection the webhook fan-out reads. This is a
-  // best-effort sync, not part of the publish's atomicity guarantee above: a failure here must
-  // never undo (or be reported as undoing) an otherwise-successful publish.
-  try {
-    if (isGlobal) {
-      await syncRegistrationsAfterGlobalPublish(env, draft.owner_user_id);
-    } else {
-      await syncRegistrationForGuild(env, draft.guild_id as string, draft.owner_user_id);
-    }
-  } catch (error) {
-    console.error(
-      "Failed to sync guild registration projection after publish:",
-      error instanceof Error ? error.message : "unknown",
-    );
   }
 
   return profile;

@@ -85,6 +85,25 @@ describe("runLinkImport", () => {
     expect(outcome.candidates).toHaveLength(1);
   });
 
+  it("drops credential-bearing and oversized public link candidates", async () => {
+    const oversized = `https://example.com/${"x".repeat(600)}`;
+    const html = `
+      <a href="https://user:password@example.com/private">Secret</a>
+      <a href="${oversized}">Oversized</a>
+      <a href="https://twitter.com/example">Safe</a>
+    `;
+    const outcome = await runLinkImport("https://mypage.example/", depsFor(html));
+    expect(outcome.candidates).toEqual([
+      {
+        platform: "twitter",
+        publicLabel: "Safe",
+        username: null,
+        normalizedUrl: "https://twitter.com/example",
+        linkType: "social",
+      },
+    ]);
+  });
+
   it("caps candidates at twelve even with many unique anchors", async () => {
     const html = Array.from({ length: 20 }, (_, i) => `<a href="https://service${i}.example/">Service ${i}</a>`).join("\n");
     const outcome = await runLinkImport("https://mypage.example/", depsFor(html));

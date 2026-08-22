@@ -83,6 +83,8 @@ function normalizeCandidateUrl(rawHref: string, baseUrl: string): URL | null {
 function candidateFromAnchor(anchor: RawAnchor, baseUrl: string, baseHostname: string): ImportCandidate | null {
   const url = normalizeCandidateUrl(anchor.href, baseUrl);
   if (url === null) return null;
+  if (url.username.length > 0 || url.password.length > 0) return null;
+  if (url.toString().length > LIMITS.linkUrlMaxChars) return null;
   // A link-in-bio page's value is the *external* services it points to; its own nav/footer/login
   // links (which share its hostname) are never legitimate import candidates.
   if (url.hostname.toLowerCase() === baseHostname) return null;

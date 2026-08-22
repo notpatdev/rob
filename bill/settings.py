@@ -39,6 +39,7 @@ class Settings:
     discord_token: str
     worker_base_url: str
     worker_api_token: str
+    home_guild_id: int
     poll_interval_seconds: int = 5
     notification_batch_size: int = 10
     notification_lease_seconds: int = 60
@@ -54,6 +55,8 @@ class Settings:
             raise SettingsError("BILL_WORKER_BASE_URL must be an absolute HTTP(S) URL")
         if parsed.scheme != "https" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
             raise SettingsError("BILL_WORKER_BASE_URL must use HTTPS outside local development")
+
+        home_guild_id = _snowflake(values, "BILL_HOME_GUILD_ID")
 
         raw_test_guild = values.get("BILL_TEST_GUILD_ID", "").strip()
         test_guild_id: int | None = None
@@ -88,6 +91,15 @@ class Settings:
                 60,
                 maximum=600,
             ),
+            home_guild_id=home_guild_id,
             test_guild_id=test_guild_id,
             log_level=log_level,
         )
+
+
+def _snowflake(environ: Mapping[str, str], name: str) -> int:
+    """Load a required Discord snowflake without ever exposing surrounding env values."""
+    value = _required(environ, name)
+    if not value.isdecimal():
+        raise SettingsError(f"{name} must be a Discord snowflake")
+    return int(value)

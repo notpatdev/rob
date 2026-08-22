@@ -18,9 +18,8 @@ describe("0003 migration additive safety", () => {
     for (const table of newTables) {
       await env.DB.prepare(`DROP TABLE IF EXISTS ${table}`).run();
     }
-    // SQLite cannot drop a single column, so rewinding `sends` back to its pre-0003 shape means
-    // rebuilding the table (matching 0001's original DDL, including its foreign keys) without
-    // `sender_discord_user_id`, then re-creating its original indexes.
+    // SQLite cannot drop individual columns. Rewind the two altered v1 tables
+    // to their exact pre-0003 shapes before replaying the migration.
     await env.DB.prepare(
       `CREATE TABLE sends_pre0003 (
          id TEXT PRIMARY KEY,
@@ -34,8 +33,40 @@ describe("0003 migration additive safety", () => {
       "INSERT INTO sends_pre0003 (id, event_id, guild_id, registration_id, created_at) SELECT id, event_id, guild_id, registration_id, created_at FROM sends",
     ).run();
     await env.DB.prepare("DROP TABLE sends").run();
+    await env.DB.prepare(
+      `CREATE TABLE domme_registrations_pre0003 (
+         id TEXT PRIMARY KEY,
+         guild_id TEXT NOT NULL REFERENCES guilds (guild_id),
+         creator_id TEXT NOT NULL REFERENCES throne_creators (id),
+         discord_user_id TEXT NOT NULL,
+         active INTEGER NOT NULL DEFAULT 1,
+         created_at TEXT NOT NULL,
+         updated_at TEXT NOT NULL
+       )`,
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO domme_registrations_pre0003
+         (id, guild_id, creator_id, discord_user_id, active, created_at, updated_at)
+       SELECT id, guild_id, creator_id, discord_user_id, active, created_at, updated_at
+         FROM domme_registrations`,
+    ).run();
+    await env.DB.prepare("DROP TABLE domme_registrations").run();
+    await env.DB.prepare(
+      "ALTER TABLE domme_registrations_pre0003 RENAME TO domme_registrations",
+    ).run();
+    await env.DB.prepare(
+      "CREATE UNIQUE INDEX idx_domme_registrations_guild_creator ON domme_registrations (guild_id, creator_id)",
+    ).run();
+    await env.DB.prepare(
+      "CREATE UNIQUE INDEX idx_domme_registrations_guild_user ON domme_registrations (guild_id, discord_user_id)",
+    ).run();
+    await env.DB.prepare(
+      "CREATE INDEX idx_domme_registrations_creator_active ON domme_registrations (creator_id, active)",
+    ).run();
     await env.DB.prepare("ALTER TABLE sends_pre0003 RENAME TO sends").run();
-    await env.DB.prepare("CREATE UNIQUE INDEX idx_sends_event_guild ON sends (event_id, guild_id)").run();
+    await env.DB.prepare(
+      "CREATE UNIQUE INDEX idx_sends_event_guild ON sends (event_id, guild_id)",
+    ).run();
     await env.DB.prepare("CREATE INDEX idx_sends_guild ON sends (guild_id)").run();
     await env.DB.prepare("DELETE FROM d1_migrations WHERE name = '0003_links_and_setup.sql'").run();
 
@@ -64,6 +95,11 @@ describe("0003 migration additive safety", () => {
     await seedGlobalProfile("910100000000000003", "doc-pre0003");
 
     const sendRowBefore = await env.DB.prepare("SELECT * FROM sends WHERE id = ?").bind(chain.sendId).first();
+    const registrationRowBefore = await env.DB.prepare(
+      "SELECT * FROM domme_registrations WHERE id = ?",
+    )
+      .bind(chain.registrationId)
+      .first();
     const aliasRowBefore = await env.DB.prepare("SELECT * FROM profile_aliases WHERE document_id = ?")
       .bind("doc-pre0003")
       .first();
@@ -84,8 +120,17 @@ describe("0003 migration additive safety", () => {
     const aliasRowAfter = await env.DB.prepare("SELECT * FROM profile_aliases WHERE document_id = ?")
       .bind("doc-pre0003")
       .first();
+    const registrationRowAfter = await env.DB.prepare(
+      "SELECT * FROM domme_registrations WHERE id = ?",
+    )
+      .bind(chain.registrationId)
+      .first<{ profile_managed: number }>();
 
     expect(sendRowAfter).toEqual({ ...(sendRowBefore as object), sender_discord_user_id: null });
+    expect(registrationRowAfter).toEqual({
+      ...(registrationRowBefore as object),
+      profile_managed: 0,
+    });
     expect(aliasRowAfter).toEqual(aliasRowBefore);
 
     // The new tables are immediately usable.

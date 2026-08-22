@@ -20,7 +20,10 @@ import type { Env } from "../env.js";
 import { requireHomeGuildId } from "../env.js";
 import { isSnowflake } from "../util/snowflake.js";
 import { newId, nowIso } from "../util/id.js";
-import { syncRegistrationsForGuildSetupCompletion } from "./registrationSync.js";
+import {
+  buildRegistrationProjectionStatements,
+  collectGuildSetupRegistrationProjections,
+} from "./registrationSync.js";
 
 export class GuildSetupError extends Error {
   readonly status: number;
@@ -237,12 +240,9 @@ export interface CompleteGuildSetupResult {
 }
 
 /**
- * Finalizes setup: atomically upserts the guild's `guilds` config row to
- * the session's chosen channel and marks the session `completed`, then (as
- * a best-effort bridge, not part of that atomic step) materializes
- * registrations for any already-published connected profile in this
- * guild -- see `registrationSync.ts` for why this can never overwrite a
- * registration the guild already had some other way.
+ * Finalizes setup: atomically upserts the guild's `guilds` config row,
+ * marks the session `completed`, and materializes every non-conflicting
+ * profile registration. Explicit v1 rows remain authoritative.
  */
 export async function completeGuildSetupSession(env: Env, input: CompleteGuildSetupInput): Promise<CompleteGuildSetupResult> {
   const row = await loadSessionCheckingExpiry(env, input.sessionId);
@@ -255,6 +255,11 @@ export async function completeGuildSetupSession(env: Env, input: CompleteGuildSe
   const now = nowIso();
   const newRevision = row.revision + 1;
   const channelId = row.selected_channel_id;
+  const registrationProjections = await collectGuildSetupRegistrationProjections(env, row.guild_id);
+  const completedGuard = {
+    sql: "EXISTS (SELECT 1 FROM guild_setup_sessions WHERE id = ? AND revision = ? AND status = 'completed')",
+    params: [row.id, newRevision],
+  };
 
   const statements: D1PreparedStatement[] = [
     env.DB.prepare(
@@ -270,21 +275,13 @@ export async function completeGuildSetupSession(env: Env, input: CompleteGuildSe
          updated_at = excluded.updated_at
        WHERE EXISTS (SELECT 1 FROM guild_setup_sessions WHERE id = ? AND revision = ? AND status = 'completed')`,
     ).bind(row.guild_id, channelId, now, now, row.id, newRevision),
+    ...buildRegistrationProjectionStatements(env, registrationProjections, completedGuard),
   ];
 
   const results = await env.DB.batch(statements);
   const guardResult = results[0];
   if (guardResult === undefined || guardResult.meta.changes === 0) {
     conflict("stale_revision", "expected_revision does not match the session's current revision");
-  }
-
-  try {
-    await syncRegistrationsForGuildSetupCompletion(env, row.guild_id);
-  } catch (error) {
-    console.error(
-      "Failed to bridge existing profiles into registrations after guild setup:",
-      error instanceof Error ? error.message : "unknown",
-    );
   }
 
   const completed = await getGuildSetupSession(env, row.id);

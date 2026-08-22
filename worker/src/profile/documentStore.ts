@@ -144,16 +144,26 @@ export async function readDocumentSnapshot(env: Env, documentId: string): Promis
  */
 export interface DraftGuard {
   readonly draftId: string;
-  readonly newRevision: number;
+  readonly expectedRevision: number;
 }
 
-const REVISION_GUARD_SQL = "EXISTS (SELECT 1 FROM profile_drafts WHERE id = ? AND revision = ? AND status = 'active')";
+const REVISION_GUARD_SQL = `EXISTS (
+  SELECT 1
+    FROM profile_drafts d
+    JOIN profile_documents p ON p.id = d.document_id
+   WHERE d.id = ? AND d.revision = ? AND d.status = 'active'
+     AND d.document_id = ? AND p.state = 'draft'
+)`;
 
-function guardSuffix(guard: DraftGuard | null, hasWhere: boolean): { sql: string; params: unknown[] } {
+function guardSuffix(
+  guard: DraftGuard | null,
+  documentId: string,
+  hasWhere: boolean,
+): { sql: string; params: unknown[] } {
   if (guard === null) return { sql: "", params: [] };
   return {
     sql: `${hasWhere ? " AND " : " WHERE "}${REVISION_GUARD_SQL}`,
-    params: [guard.draftId, guard.newRevision],
+    params: [guard.draftId, guard.expectedRevision, documentId],
   };
 }
 
@@ -162,9 +172,11 @@ function guardSuffix(guard: DraftGuard | null, hasWhere: boolean): { sql: string
  * draft start) or overwrite an existing one's scalar fields and full child
  * set (used by draft restart and step mutation). When `guard` is supplied,
  * every statement is a no-op unless the named draft is still active at
- * exactly `newRevision` -- see `draftService.ts` for how the first
- * statement in the caller's batch is what actually sets that revision, so
- * a stale/racing caller causes the whole batch to leave no trace.
+ * exactly the caller's old `expectedRevision`. The caller places its
+ * compare-and-swap last in the same D1 batch. A losing batch therefore sees
+ * the winner's newer revision before any statement runs, making every write
+ * a no-op; it can never mistake the winner's predictable next revision for
+ * its own authority.
  */
 export function buildDocumentWriteStatements(
   env: Env,
@@ -176,7 +188,7 @@ export function buildDocumentWriteStatements(
 ): D1PreparedStatement[] {
   const { isNew, guard } = options;
   const statements: D1PreparedStatement[] = [];
-  const guardFragment = guardSuffix(guard, true);
+  const guardFragment = guardSuffix(guard, documentId, true);
 
   if (isNew) {
     statements.push(
@@ -253,7 +265,7 @@ export function buildDocumentWriteStatements(
     );
   }
 
-  const insertGuardFragment = guardSuffix(guard, false);
+  const insertGuardFragment = guardSuffix(guard, documentId, false);
 
   snapshot.selections.pronouns.forEach((value, index) => {
     statements.push(buildSelectionInsert(env, documentId, "pronoun", value, index, insertGuardFragment));

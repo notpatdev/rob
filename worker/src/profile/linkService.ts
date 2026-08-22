@@ -114,23 +114,23 @@ async function loadDraftAndSnapshot(
 async function commitSnapshot(env: Env, draft: DraftRow, newSnapshot: DocumentSnapshot): Promise<DraftContract> {
   const now = nowIso();
   const newRevision = draft.revision + 1;
-  const guard = { draftId: draft.id, newRevision };
+  const guard = { draftId: draft.id, expectedRevision: draft.revision };
 
   const statements: D1PreparedStatement[] = [
-    env.DB.prepare("UPDATE profile_drafts SET revision = ?, updated_at = ? WHERE id = ? AND revision = ? AND status = 'active'").bind(
-      newRevision,
-      now,
-      draft.id,
-      draft.revision,
-    ),
     ...buildDocumentWriteStatements(env, draft.document_id, draft.owner_user_id, newSnapshot, now, {
       isNew: false,
       guard,
     }),
+    env.DB.prepare(
+      `UPDATE profile_drafts
+          SET revision = ?, updated_at = ?
+        WHERE id = ? AND revision = ? AND status = 'active'
+          AND EXISTS (SELECT 1 FROM profile_documents WHERE id = ? AND state = 'draft')`,
+    ).bind(newRevision, now, draft.id, draft.revision, draft.document_id),
   ];
 
   const results = await env.DB.batch(statements);
-  const guardResult = results[0];
+  const guardResult = results.at(-1);
   if (guardResult === undefined || guardResult.meta.changes === 0) {
     conflict("stale_revision", "expected_revision does not match the draft's current revision");
   }

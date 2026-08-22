@@ -133,6 +133,31 @@ describe("fetchHtmlSafely", () => {
     );
   });
 
+  it("uses one total timeout across DNS, redirects, and body fetching", async () => {
+    const deps: ImporterDeps = {
+      timeoutMs: 5,
+      resolveIps: async () => [PUBLIC_IP],
+      fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 25);
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(new DOMException("aborted", "AbortError"));
+            },
+            { once: true },
+          );
+        });
+        return redirectResponse("https://example.com/next");
+      }) as typeof fetch,
+    };
+
+    await expect(fetchHtmlSafely("https://example.com/start", deps)).rejects.toThrowError(
+      expect.objectContaining({ code: "fetch_failed" }),
+    );
+  });
+
   it("runs the DNS preflight before ever calling fetch, and blocks if it fails", async () => {
     let fetchCalled = false;
     const deps: ImporterDeps = {

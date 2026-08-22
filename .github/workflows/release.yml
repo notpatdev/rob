@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Validation needs only repository reads. The publishing job receives its own
+# narrowly scoped write permission after every check succeeds.
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate tag and code
+    runs-on: ubuntu-latest
+    outputs:
+      tag_object: ${{ steps.release_metadata.outputs.tag_object }}
+    steps:
+      - name: Check out the tagged revision with release history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch current main ref
+        run: git fetch --no-tags origin main:refs/remotes/origin/main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Validate release tag and synchronized versions
+        id: release_metadata
+        run: |
+          python scripts/validate_release.py "$GITHUB_REF_NAME"
+          tag_object="$(git rev-parse "refs/tags/${GITHUB_REF_NAME}")"
+          echo "tag_object=${tag_object}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Python dependencies
+        run: python -m pip install -e '.[dev]'
+
+      - name: Compile Python
+        run: python -m compileall -q bill
+
+      - name: Lint Python
+        run: ruff check bill tests
+
+      - name: Test Python
+        run: pytest -q
+
+      - name: Install Worker dependencies
+        working-directory: worker
+        run: npm ci
+
+      - name: Type-check and test Worker
+        working-directory: worker
+        run: npm run check
+
+  publish:
+    name: Publish GitHub Release
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create release once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Bind publishing to the exact annotated tag object that passed validation.
+          live_tag_object="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" \
+            --jq '.object.sha')"
+          if [[ "${live_tag_object}" != "${EXPECTED_TAG_OBJECT}" ]]; then
+            echo "Tag changed after validation; refusing to publish." >&2
+            exit 1
+          fi
+
+          # A rerun must preserve any release text that a maintainer may have edited.
+          error_file="$(mktemp)"
+          trap 'rm -f "${error_file}"' EXIT
+          if release_url="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+              --jq '.html_url' 2>"${error_file}")"; then
+            echo "Release already exists: ${release_url}"
+            exit 0
+          fi
+
+          if ! grep -q 'HTTP 404' "${error_file}"; then
+            cat "${error_file}" >&2
+            exit 1
+          fi
+
+          gh release create "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --generate-notes \
+            --title "Bill ${TAG}"

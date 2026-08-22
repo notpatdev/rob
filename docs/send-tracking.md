@@ -5,18 +5,20 @@
 An administrator with **Manage Server** runs:
 
 ```text
-/bill setup send_channel:#sends
+/bill setup
 ```
 
-Bill checks **View Channel**, **Send Messages**, and **Embed Links** before
-saving the channel.
+The command posts a public, initiator-only setup flow. Bill checks **View
+Channel**, **Send Messages**, **Embed Links**, and **Read Message History**
+before saving the selected channel.
 
 ## Dom/me setup
 
-In a configured server, the Dom/me runs:
+Dom/me and switch members connect Throne privately while creating or editing
+their profile:
 
 ```text
-/register domme throne:your-throne-name
+/profile
 ```
 
 A full `https://throne.com/...` or `https://throne.gifts/...` profile URL also
@@ -27,8 +29,8 @@ Webhook URLs use `https://usebill.dev/t/<creator>/<secret>`. Authenticated bot
 API routes remain under `https://usebill.dev/v1`.
 
 The webhook URL contains a secret. Do not post or share it. Bill stores only its
-SHA-256 hash. If the URL is exposed, rerun the command with
-`reset_webhook:True`; the previous URL stops working.
+SHA-256 hash. If the URL is exposed, use the profile editor's explicit rotation
+action; the previous URL stops working.
 
 The same Discord user can link that Throne creator in more than one server. The
 existing webhook remains valid and each verified send is posted to every
@@ -45,6 +47,8 @@ conversion is not part of this milestone.
 - Private sends hide the amount and sender.
 - Anonymous sends keep permitted amount/item details but do not keep the sender
   identity.
+- Non-private, non-anonymous future sends may be attributed when the sender
+  name unambiguously matches one effective profile alias in that guild.
 - Repeated delivery of the same Throne event creates no duplicate Discord post.
 
 If a channel is deleted or Bill loses access, an administrator should restore

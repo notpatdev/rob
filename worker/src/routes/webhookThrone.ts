@@ -5,6 +5,7 @@ import { constantTimeEqualHex, sha256Hex } from "../util/hash.js";
 import { newId, nowIso } from "../util/id.js";
 import { parseThroneEvent } from "../throne/parser.js";
 import { importThroneEd25519PublicKey, isTimestampWithinSkew, verifyThroneSignature } from "../throne/signature.js";
+import { resolveSenderDiscordUserId } from "../profile/aliasAttribution.js";
 
 interface CreatorRow {
   id: string;
@@ -133,18 +134,34 @@ export async function handleThroneWebhook(ctx: RouteContext): Promise<Response> 
     "UPDATE throne_creators SET webhook_verified_at = ? WHERE id = ?",
   ).bind(receivedAt, creatorId);
 
-  const fanOutStatements = activeRegistrations.flatMap((registration) => {
+  // Attribution only ever runs when the parser has a sender name to match at all; it has already
+  // nulled both sender fields for private/anonymous events, so those never reach this branch.
+  const senderIdByGuild = new Map<string, string | null>();
+  const fanOutStatements: D1PreparedStatement[] = [];
+  for (const registration of activeRegistrations) {
+    let senderDiscordUserId: string | null = null;
+    if (parsed.senderUsername !== null || parsed.senderDisplayName !== null) {
+      if (!senderIdByGuild.has(registration.guild_id)) {
+        senderIdByGuild.set(
+          registration.guild_id,
+          await resolveSenderDiscordUserId(ctx.env, registration.guild_id, parsed.senderUsername, parsed.senderDisplayName),
+        );
+      }
+      senderDiscordUserId = senderIdByGuild.get(registration.guild_id) ?? null;
+    }
+
     const sendId = newId();
     const notificationId = newId();
-    const insertSendStmt = ctx.env.DB.prepare(
-      "INSERT INTO sends (id, event_id, guild_id, registration_id, created_at) VALUES (?, ?, ?, ?, ?)",
-    ).bind(sendId, eventRowId, registration.guild_id, registration.id, receivedAt);
-    const insertNotificationStmt = ctx.env.DB.prepare(
-      `INSERT INTO notifications (id, send_id, status, attempts, max_attempts, next_attempt_at, created_at, updated_at)
-       VALUES (?, ?, 'pending', 0, ?, ?, ?, ?)`,
-    ).bind(notificationId, sendId, maxAttempts, receivedAt, receivedAt, receivedAt);
-    return [insertSendStmt, insertNotificationStmt];
-  });
+    fanOutStatements.push(
+      ctx.env.DB.prepare(
+        "INSERT INTO sends (id, event_id, guild_id, registration_id, sender_discord_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ).bind(sendId, eventRowId, registration.guild_id, registration.id, senderDiscordUserId, receivedAt),
+      ctx.env.DB.prepare(
+        `INSERT INTO notifications (id, send_id, status, attempts, max_attempts, next_attempt_at, created_at, updated_at)
+         VALUES (?, ?, 'pending', 0, ?, ?, ?, ?)`,
+      ).bind(notificationId, sendId, maxAttempts, receivedAt, receivedAt, receivedAt),
+    );
+  }
 
   try {
     await ctx.env.DB.batch([insertEventStmt, markVerifiedStmt, ...fanOutStatements]);

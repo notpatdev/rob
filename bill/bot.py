@@ -8,8 +8,11 @@ import aiohttp
 import discord
 from discord.ext import commands
 
-from bill.cogs.registration import RegistrationCog
+from bill.cogs.profile import ProfileCog
 from bill.cogs.setup import BillSetupCog
+from bill.components.profile import ProfileSelectDynamic, ProfileWizardDynamic
+from bill.components.public_profile import ProfileEditDynamic, ProfileLinksDynamic
+from bill.components.setup import SetupChannelDynamic, SetupCompleteDynamic
 from bill.notifications import NotificationPoller
 from bill.settings import Settings
 from bill.worker_client import WorkerClient
@@ -35,7 +38,17 @@ class BillBot(commands.Bot):
             session=self.http_session,
         )
         await self.add_cog(BillSetupCog(self))
-        await self.add_cog(RegistrationCog(self))
+        await self.add_cog(ProfileCog(self))
+        # Dynamic dispatchers are registered before sync so controls remain usable
+        # after a process restart; Worker state remains the source of authority.
+        self.add_dynamic_items(
+            ProfileWizardDynamic,
+            ProfileSelectDynamic,
+            ProfileLinksDynamic,
+            ProfileEditDynamic,
+            SetupChannelDynamic,
+            SetupCompleteDynamic,
+        )
 
         if self.settings.test_guild_id is not None:
             guild = discord.Object(id=self.settings.test_guild_id)

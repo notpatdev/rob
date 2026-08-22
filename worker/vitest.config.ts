@@ -15,6 +15,7 @@ export default defineWorkersConfig(async () => {
               BILL_BOT_API_TOKEN: "test-bot-token",
               THRONE_PUBLIC_KEY_PEM: "",
               PUBLIC_BASE_URL: "https://usebill.dev",
+              BILL_HOME_GUILD_ID: "100000000000000001",
               THRONE_TEST_GIFTER_USERNAMES: "test-gifter",
             },
           },

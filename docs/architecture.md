@@ -10,9 +10,10 @@ Discord bot <--leased notifications-- Cloudflare Worker
 
 ## Cloudflare Worker
 
-The Worker owns guild configuration, Dom/me registrations, normalized Throne
-events, guild send projections, and notification delivery state. Public access
-is limited to `/health` and the Throne webhook route.
+The Worker owns guild configuration, immutable profile documents, private
+drafts, link imports, Throne registrations, normalized Throne events, guild
+send projections, and notification delivery state. Public access is limited to
+`/health` and the Throne webhook route.
 
 Bot routes require `Authorization: Bearer <BILL_BOT_API_TOKEN>`. The Throne
 route requires both a per-creator secret in the URL and a current Ed25519
@@ -24,10 +25,11 @@ hash make webhook retries idempotent.
 
 ## Discord bot
 
-The bot owns Discord interactions and message delivery only. It configures
-guilds and registrations through the Worker API, then polls for leased send
-notifications. A stable message nonce and footer marker let a retry reconcile a
-post that reached Discord before its acknowledgement reached the Worker.
+The bot owns Discord interactions and message delivery only. It renders profile
+and setup state returned by the Worker; no wizard state is authoritative in
+Python memory. It also polls for leased send notifications. A stable message
+nonce and footer marker let a retry reconcile a post that reached Discord
+before its acknowledgement reached the Worker.
 
 Discord guild, channel, user, and message IDs remain decimal strings across the
 API and in D1. They are converted to Python integers only when calling Discord.
@@ -38,6 +40,10 @@ API and in D1. They are converted to Python integers only when calling Discord.
 - Duplicate Throne events return success without creating duplicate sends.
 - Notification leases expire so another bot instance can recover abandoned
   work.
+- Draft and setup mutations compare an expected revision and reject stale
+  controls without partially updating D1.
+- Publication uses one D1 batch and a profile-root version compare-and-swap, so
+  an older draft cannot overwrite a newer publication.
 - Permanent channel or permission failures are dead-lettered; transient errors
   are retried with backoff.
 - Secrets, raw webhook bodies, and full payloads are never logged.

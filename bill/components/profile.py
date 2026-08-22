@@ -62,6 +62,42 @@ ORIENTATION_LABELS = {
     Orientation.SWITCH_DOMME: "Switch (Dom/me lean)",
     Orientation.SWITCH_SUBMISSIVE: "Switch (submissive lean)",
 }
+PROFILE_WIZARD_BUTTON_ACTIONS = (
+    "publish",
+    "restart",
+    "identity",
+    "links",
+    "import",
+    "visibility",
+    "complete-links",
+    "skip-links",
+    "throne",
+    "skip-throne",
+    "rotate",
+)
+PROFILE_WIZARD_SELECT_ACTIONS = (
+    "orientation",
+    "identity-pronouns",
+    "identity-honourifics",
+    "identity-labels",
+    "link-select",
+    "creator-select",
+)
+_PROFILE_WIZARD_ACTIONS = frozenset(
+    (*PROFILE_WIZARD_BUTTON_ACTIONS, *PROFILE_WIZARD_SELECT_ACTIONS)
+)
+_PROFILE_WIZARD_ID_PATTERN = (
+    r"bill:p:(?P<draft>[A-Za-z0-9_-]+):(?P<owner>[a-z0-9]+):"
+    r"(?P<guild>[a-z0-9]+):(?P<revision>[a-z0-9]+):"
+)
+_PROFILE_WIZARD_BUTTON_TEMPLATE = re.compile(
+    _PROFILE_WIZARD_ID_PATTERN
+    + rf"(?P<action>{'|'.join(map(re.escape, PROFILE_WIZARD_BUTTON_ACTIONS))})$"
+)
+_PROFILE_WIZARD_SELECT_TEMPLATE = re.compile(
+    _PROFILE_WIZARD_ID_PATTERN
+    + rf"(?P<action>{'|'.join(map(re.escape, PROFILE_WIZARD_SELECT_ACTIONS))})$"
+)
 
 
 def safe_text(value: str, *, limit: int = 300) -> str:
@@ -71,6 +107,8 @@ def safe_text(value: str, *, limit: int = 300) -> str:
 
 def wizard_custom_id(draft: ProfileDraft, action: str) -> str:
     """Build a <=100-character persistent ID bound to all durable auth context."""
+    if action not in _PROFILE_WIZARD_ACTIONS:
+        raise ValueError(f"Unsupported Bill profile component action: {action}")
     custom_id = (
         f"bill:p:{encode_resource_id(draft.id)}:{encode_uint(draft.owner_user_id)}:"
         f"{encode_uint(draft.origin_guild_id)}:{encode_uint(draft.revision)}:{action}"
@@ -366,10 +404,7 @@ class ThroneCreatorSelect(discord.ui.Select):
 
 class ProfileWizardDynamic(
     discord.ui.DynamicItem[discord.ui.Button],
-    template=re.compile(
-        r"bill:p:(?P<draft>[A-Za-z0-9_-]+):(?P<owner>[a-z0-9]+):"
-        r"(?P<guild>[a-z0-9]+):(?P<revision>[a-z0-9]+):(?P<action>[a-z0-9:_-]+)$"
-    ),
+    template=_PROFILE_WIZARD_BUTTON_TEMPLATE,
 ):
     """Persistent action dispatcher; only Worker state decides whether it is valid."""
 
@@ -548,12 +583,7 @@ class ProfileWizardDynamic(
 
 class _ProfileSelectDynamic(
     discord.ui.DynamicItem[discord.ui.Select],
-    template=re.compile(
-        r"bill:p:(?P<draft>[A-Za-z0-9_-]+):(?P<owner>[a-z0-9]+):"
-        r"(?P<guild>[a-z0-9]+):(?P<revision>[a-z0-9]+):"
-        r"(?P<action>orientation|identity-pronouns|identity-honourifics|"
-        r"identity-labels|link-select|creator-select)$"
-    ),
+    template=_PROFILE_WIZARD_SELECT_TEMPLATE,
 ):
     def __init__(
         self,

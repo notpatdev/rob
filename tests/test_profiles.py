@@ -10,6 +10,10 @@ import pytest
 
 from bill.components.profile import (
     ORIENTATION_LABELS,
+    PROFILE_WIZARD_BUTTON_ACTIONS,
+    PROFILE_WIZARD_SELECT_ACTIONS,
+    ProfileSelectDynamic,
+    ProfileWizardDynamic,
     _identity_values,
     profile_wizard_view,
     wizard_custom_id,
@@ -297,6 +301,41 @@ def test_setup_custom_id_binds_initiator_guild_and_revision() -> None:
 
     assert custom_id == "bill:s:rsetup:1:2:4:channel"
     assert len(custom_id) <= 100
+
+
+def _matching_profile_dispatchers(custom_id: str) -> list[type[discord.ui.DynamicItem]]:
+    dispatchers = [ProfileWizardDynamic, ProfileSelectDynamic]
+    return [
+        dispatcher
+        for dispatcher in dispatchers
+        if dispatcher.__discord_ui_compiled_template__.fullmatch(custom_id)
+    ]
+
+
+@pytest.mark.parametrize("action", PROFILE_WIZARD_SELECT_ACTIONS)
+def test_profile_select_actions_match_only_select_dispatcher(action: str) -> None:
+    custom_id = wizard_custom_id(draft(), action)
+
+    assert _matching_profile_dispatchers(custom_id) == [ProfileSelectDynamic]
+
+
+@pytest.mark.parametrize("action", PROFILE_WIZARD_BUTTON_ACTIONS)
+def test_profile_button_actions_match_only_button_dispatcher(action: str) -> None:
+    custom_id = wizard_custom_id(draft(), action)
+
+    assert _matching_profile_dispatchers(custom_id) == [ProfileWizardDynamic]
+
+
+def test_every_emittable_profile_action_has_exactly_one_dispatcher() -> None:
+    actions = (*PROFILE_WIZARD_BUTTON_ACTIONS, *PROFILE_WIZARD_SELECT_ACTIONS)
+
+    assert len(actions) == len(set(actions))
+    assert all(
+        len(_matching_profile_dispatchers(wizard_custom_id(draft(), action))) == 1
+        for action in actions
+    )
+    with pytest.raises(ValueError, match="Unsupported Bill profile component action"):
+        wizard_custom_id(draft(), "unknown")
 
 
 def test_realistic_persistent_ids_fit_discord_limit() -> None:

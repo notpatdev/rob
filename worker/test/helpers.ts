@@ -3,6 +3,7 @@ import worker from "../src/index";
 import { sha256Hex } from "../src/util/hash";
 
 export const TEST_BOT_TOKEN = "test-bot-token";
+export const TEST_HOME_GUILD_ID = "100000000000000001";
 
 export function authHeaders(extra?: Record<string, string>): Record<string, string> {
   return { Authorization: `Bearer ${TEST_BOT_TOKEN}`, ...extra };

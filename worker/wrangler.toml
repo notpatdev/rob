@@ -3,11 +3,11 @@ main = "src/index.ts"
 compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Replace database_id with the ID returned by `wrangler d1 create bill`.
+# Live D1 database id for the `bill` database.
 [[d1_databases]]
 binding = "DB"
 database_name = "bill"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "6333cb0a-0c23-44b2-9022-a6fde1500f77"
 migrations_dir = "migrations"
 
 [vars]
@@ -17,6 +17,9 @@ NOTIFICATION_MAX_ATTEMPTS = "5"
 NOTIFICATION_BACKOFF_BASE_SECONDS = "30"
 NOTIFICATION_BACKOFF_MAX_SECONDS = "900"
 MAX_TIMESTAMP_SKEW_SECONDS = "300"
+# Required: Bill's home guild. Global profiles are only usable while acting
+# in this guild; replace with the real production guild id before deploying.
+BILL_HOME_GUILD_ID = "000000000000000000"
 
 # Secrets (set with `wrangler secret put`, never committed):
 #   BILL_BOT_API_TOKEN

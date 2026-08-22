@@ -1,3 +1,5 @@
+import { isSnowflake } from "./util/snowflake.js";
+
 /** Cloudflare Worker bindings for Bill. */
 export interface Env {
   readonly DB: D1Database;
@@ -9,6 +11,14 @@ export interface Env {
 
   /** Public base URL used to build webhook URLs returned to the bot, e.g. https://usebill.dev */
   readonly PUBLIC_BASE_URL: string;
+
+  /**
+   * Required: the Discord snowflake of Bill's home guild. Global profiles
+   * are only readable/writable while acting in this guild (everywhere else
+   * only server-scoped profiles apply); the bot enforces the same
+   * restriction so both sides agree on what "home" means.
+   */
+  readonly BILL_HOME_GUILD_ID: string;
 
   /** Optional comma-separated list of Throne usernames treated as test senders. */
   readonly THRONE_TEST_GIFTER_USERNAMES?: string;
@@ -32,6 +42,28 @@ export interface ResolvedConfig {
   notificationBackoffMaxSeconds: number;
   maxTimestampSkewSeconds: number;
   testGifterUsernames: ReadonlySet<string>;
+}
+
+/** Thrown when `BILL_HOME_GUILD_ID` is missing/malformed at request time. */
+export class HomeGuildNotConfiguredError extends Error {
+  constructor() {
+    super("BILL_HOME_GUILD_ID is not configured with a valid Discord snowflake");
+  }
+}
+
+/**
+ * `BILL_HOME_GUILD_ID` is a required setting, but Worker env vars are plain
+ * strings at runtime with no framework-level enforcement of "required" --
+ * an empty/missing/malformed value would otherwise silently coerce to `""`
+ * and could wrongly match an unset `guildId`. Every code path that needs
+ * home-guild identity must go through this guard instead of reading
+ * `env.BILL_HOME_GUILD_ID` directly.
+ */
+export function requireHomeGuildId(env: Env): string {
+  if (!isSnowflake(env.BILL_HOME_GUILD_ID)) {
+    throw new HomeGuildNotConfiguredError();
+  }
+  return env.BILL_HOME_GUILD_ID;
 }
 
 export function resolveConfig(env: Env): ResolvedConfig {

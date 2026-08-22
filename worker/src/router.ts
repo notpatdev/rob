@@ -43,6 +43,14 @@ export class Router {
     this.add("POST", path, handler);
   }
 
+  patch(path: string, handler: RouteHandler): void {
+    this.add("PATCH", path, handler);
+  }
+
+  delete(path: string, handler: RouteHandler): void {
+    this.add("DELETE", path, handler);
+  }
+
   /** Returns the matched handler/params, or null with a flag for "path matched, method didn't". */
   match(method: string, pathname: string): { handler: RouteHandler; params: Record<string, string> } | "method_not_allowed" | null {
     const segments = splitPath(pathname);

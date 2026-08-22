@@ -28,9 +28,18 @@ npm ci
 npm run check
 ```
 
-See the [codebase guide](docs/codebase-guide.md), [profiles](docs/profiles.md),
-[deployment](docs/deployment.md), [architecture](docs/architecture.md), and
-[send tracking](docs/send-tracking.md).
+## Guides
+
+- [Codebase guide](docs/codebase-guide.md)
+- [Profiles](docs/profiles.md)
+- [Version control with Git and GitHub](docs/version-control.md)
+- [Collaborating with Issues, PRs, reviews, and stacks](docs/github-collaboration.md)
+- [Releasing Bill](docs/releases.md)
+- [Contributing](CONTRIBUTING.md)
+- [Deployment](docs/deployment.md)
+- [Architecture](docs/architecture.md)
+- [Send tracking](docs/send-tracking.md)
+- [Roadmap](docs/roadmap.md)
 
 ## Current scope
 

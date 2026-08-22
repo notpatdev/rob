@@ -63,6 +63,12 @@ ORIENTATION_LABELS = {
     Orientation.SWITCH_DOMME: "Switch (Dom/me lean)",
     Orientation.SWITCH_SUBMISSIVE: "Switch (submissive lean)",
 }
+DM_STATUS_OPTIONS = (
+    (DmStatus.OPEN, "Open", "DMs are welcome"),
+    (DmStatus.BY_REQUEST, "By Request", "Ask before sending a DM"),
+    (DmStatus.AFTER_TRIBUTE, "After Tribute", "DMs open after tribute"),
+    (DmStatus.CLOSED, "Closed", "Not accepting DMs"),
+)
 PROFILE_WIZARD_BUTTON_ACTIONS = (
     "start",
     "publish",
@@ -82,6 +88,7 @@ PROFILE_WIZARD_SELECT_ACTIONS = (
     "identity-pronouns",
     "identity-honourifics",
     "identity-labels",
+    "identity-dm-status",
     "link-select",
     "creator-select",
 )
@@ -275,12 +282,23 @@ def profile_wizard_view(
         )
         container.add_item(discord.ui.ActionRow(OrientationSelect(draft)))
     elif current is DraftStepKey.IDENTITY:
+        linked = (
+            draft.target_scope is DraftScope.SERVER
+            and draft.server_mode is ServerProfileMode.LINKED
+        )
         container.add_item(
             discord.ui.TextDisplay(
-                "Choose the labels you want to show, then add your DM status, optional bio, "
-                "aliases, and public send-stat preference."
+                "Choose a DM status and the labels you want to show, then save any optional "
+                "bio, aliases, and public send-stat preference."
+                + (
+                    " Use global setting keeps this server's DM status linked to your global "
+                    "profile."
+                    if linked
+                    else ""
+                )
             )
         )
+        container.add_item(discord.ui.ActionRow(DmStatusSelect(draft)))
         container.add_item(
             discord.ui.ActionRow(IdentitySelect(draft, "pronouns", PRONOUNS, "Choose pronouns"))
         )
@@ -311,7 +329,7 @@ def profile_wizard_view(
             discord.ui.ActionRow(
                 _button(
                     draft,
-                    "Save DM status, bio & aliases",
+                    "Save identity details",
                     "identity",
                     discord.ButtonStyle.primary,
                 )
@@ -477,6 +495,41 @@ class IdentitySelect(discord.ui.Select):
                 discord.SelectOption(label=choice, value=choice, default=choice in selected)
                 for choice in choices
             ],
+        )
+
+
+class DmStatusSelect(discord.ui.Select):
+    def __init__(self, draft: ProfileDraft) -> None:
+        linked = (
+            draft.target_scope is DraftScope.SERVER
+            and draft.server_mode is ServerProfileMode.LINKED
+        )
+        overridden = set(draft.document.overridden_fields)
+        inherited = linked and "dm_status" not in overridden
+        options = [
+            discord.SelectOption(
+                label=label,
+                value=status.value,
+                description=description,
+                default=not inherited and draft.document.dm_status is status,
+            )
+            for status, label, description in DM_STATUS_OPTIONS
+        ]
+        if linked:
+            options.append(
+                discord.SelectOption(
+                    label="Use global setting",
+                    value="inherit",
+                    description="Follow your current global DM status",
+                    default=inherited,
+                )
+            )
+        super().__init__(
+            custom_id=wizard_custom_id(draft, "identity-dm-status"),
+            placeholder="Choose a DM status",
+            min_values=1,
+            max_values=1,
+            options=options,
         )
 
 
@@ -768,7 +821,7 @@ class _ProfileSelectDynamic(
                     expected_revision=draft.revision,
                     values=_partial_identity_values(draft, field, tuple(self.item.values)),
                 )
-            except WorkerAPIError as exc:
+            except (ValueError, WorkerAPIError) as exc:
                 await interaction.response.send_message(
                     f"Bill could not save that identity selection: {exc}",
                     ephemeral=True,
@@ -831,7 +884,13 @@ ProfileSelectDynamic = _ProfileSelectDynamic
 
 
 def _identity_values(
-    draft: ProfileDraft, pronouns: str, honourifics: str, labels: str, aliases: str, details: str
+    draft: ProfileDraft,
+    pronouns: str,
+    honourifics: str,
+    labels: str,
+    aliases: str,
+    stats_raw: str,
+    bio_raw: str,
 ) -> dict[str, object]:
     orientation = draft.governing_orientation
     if orientation is None:
@@ -839,16 +898,20 @@ def _identity_values(
     honourific_available, label_available, aliases_available, _, stats_available = _caps(
         orientation
     )
-    detail_parts = [part.strip() for part in details.split("|", 2)]
-    if len(detail_parts) != 3:
-        raise ValueError("use: DM status | stats on/off | bio")
-    dm_raw, stats_raw, bio_raw = detail_parts
+    stats_raw = stats_raw.strip()
+    bio_raw = bio_raw.strip()
     linked = (
         draft.target_scope is DraftScope.SERVER and draft.server_mode is ServerProfileMode.LINKED
     )
-    status = (
-        None if linked and dm_raw.casefold() == "inherit" else DmStatus(dm_raw.casefold()).value
-    )
+    existing_overrides = set(draft.document.overridden_fields)
+    if linked and "dm_status" not in existing_overrides:
+        status = None
+    elif draft.document.dm_status is not None:
+        status = draft.document.dm_status.value
+    elif linked:
+        raise ValueError("choose a DM status or Use global setting from the menu")
+    else:
+        raise ValueError("choose a DM status from the menu before saving identity")
     if stats_raw.casefold() == "inherit" and linked:
         stats: bool | None = None
     elif stats_raw.casefold() in {"on", "yes", "true"}:
@@ -880,14 +943,13 @@ def _identity_values(
     }
     if linked:
         overrides: list[str] = []
-        existing_overrides = set(draft.document.overridden_fields)
         if pronouns.strip() or "pronouns" in existing_overrides:
             overrides.append("pronouns")
         if honourific_available and (honourifics.strip() or "honourifics" in existing_overrides):
             overrides.append("honourifics")
         if label_available and (labels.strip() or "submissive_labels" in existing_overrides):
             overrides.append("submissive_labels")
-        if status is not None:
+        if "dm_status" in existing_overrides:
             overrides.append("dm_status")
         if bio_overridden:
             overrides.append("bio")
@@ -904,30 +966,45 @@ def _partial_identity_values(
     field: str,
     selected: tuple[str, ...],
 ) -> dict[str, object]:
-    pronouns = selected if field == "pronouns" else draft.document.selections.pronouns
-    honourifics = selected if field == "honourifics" else draft.document.selections.honourifics
-    labels = selected if field == "labels" else draft.document.selections.submissive_labels
     linked = (
         draft.target_scope is DraftScope.SERVER and draft.server_mode is ServerProfileMode.LINKED
     )
     overrides = set(draft.document.overridden_fields)
-    if linked:
-        overrides.add(
-            {
-                "pronouns": "pronouns",
-                "honourifics": "honourifics",
-                "labels": "submissive_labels",
-            }[field]
-        )
+    status = draft.document.dm_status.value if draft.document.dm_status else None
+    if field == "dm-status":
+        if len(selected) != 1:
+            raise ValueError("choose one DM status")
+        if selected[0] == "inherit":
+            if not linked:
+                raise ValueError("only linked profiles can use the global DM setting")
+            status = None
+            overrides.discard("dm_status")
+        else:
+            try:
+                status = DmStatus(selected[0]).value
+            except ValueError as exc:
+                raise ValueError("choose a valid DM status") from exc
+            if linked:
+                overrides.add("dm_status")
+    elif field in {"pronouns", "honourifics", "labels"}:
+        if linked:
+            overrides.add(
+                {
+                    "pronouns": "pronouns",
+                    "honourifics": "honourifics",
+                    "labels": "submissive_labels",
+                }[field]
+            )
+    else:
+        raise ValueError("choose a valid identity field")
+    pronouns = selected if field == "pronouns" else draft.document.selections.pronouns
+    honourifics = selected if field == "honourifics" else draft.document.selections.honourifics
+    labels = selected if field == "labels" else draft.document.selections.submissive_labels
     values: dict[str, object] = {
         "pronouns": list(pronouns),
         "honourifics": list(honourifics),
         "submissive_labels": list(labels),
-        "dm_status": (
-            draft.document.dm_status.value
-            if draft.document.dm_status
-            else (None if linked else DmStatus.OPEN.value)
-        ),
+        "dm_status": status,
         "bio": draft.document.bio,
         "public_send_stats": draft.document.public_send_stats,
         "aliases": list(draft.document.aliases),
@@ -1066,24 +1143,26 @@ class IdentityModal(discord.ui.Modal, title="Profile identity"):
             and draft.server_mode is ServerProfileMode.LINKED
         )
         overridden = set(draft.document.overridden_fields)
-        dm_default = (
-            draft.document.dm_status.value
-            if draft.document.dm_status
-            else ("inherit" if linked else DmStatus.OPEN.value)
-        )
         stats_default = (
             "inherit"
             if linked and "public_send_stats" not in overridden
             else ("on" if draft.document.public_send_stats else "off")
         )
-        bio_default = draft.document.bio or "-" if not linked or "bio" in overridden else ""
-        self.details = discord.ui.TextInput(
-            label="DM status | stats on/off | bio (- clears)",
-            default=f"{dm_default} | {stats_default} | {bio_default}",
+        bio_default = (draft.document.bio or "-") if not linked or "bio" in overridden else ""
+        self.stats = discord.ui.TextInput(
+            label="Public send stats: on/off/inherit",
+            default=stats_default,
             required=True,
-            max_length=380,
+            max_length=7,
         )
-        for field in (self.aliases, self.details):
+        self.bio = discord.ui.TextInput(
+            label="Bio (- clears; blank inherits when linked)",
+            default=bio_default,
+            required=False,
+            max_length=300,
+            style=discord.TextStyle.paragraph,
+        )
+        for field in (self.aliases, self.stats, self.bio):
             self.add_item(field)
 
     async def on_submit(self, interaction: discord.Interaction[discord.Client]) -> None:
@@ -1100,7 +1179,8 @@ class IdentityModal(discord.ui.Modal, title="Profile identity"):
                     ", ".join(self.draft.document.selections.honourifics),
                     ", ".join(self.draft.document.selections.submissive_labels),
                     self.aliases.value,
-                    self.details.value,
+                    self.stats.value,
+                    self.bio.value,
                 ),
             )
         except (ValueError, WorkerAPIError) as exc:

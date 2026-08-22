@@ -428,6 +428,7 @@ async function computeNewSnapshot(
   stepKey: StepKey,
   governingOrientation: Orientation | null,
   body: unknown,
+  completeStep: boolean,
 ): Promise<DocumentSnapshot> {
   const linked = draft.target_scope === "server" && draft.server_mode === "linked";
 
@@ -458,7 +459,7 @@ async function computeNewSnapshot(
         overriddenFields: Array.from(parsed.overriddenFields),
       };
     }
-    const parsed = parseIdentityStep(body, governingOrientation);
+    const parsed = parseIdentityStep(body, governingOrientation, !completeStep);
     return {
       ...current,
       dmStatus: parsed.dmStatus,
@@ -566,7 +567,15 @@ export async function applyDraftStep(env: Env, input: ApplyStepInput): Promise<D
 
   let newSnapshot: DocumentSnapshot;
   try {
-    newSnapshot = await computeNewSnapshot(env, draft, current, input.stepKey, governingOrientation, input.body);
+    newSnapshot = await computeNewSnapshot(
+      env,
+      draft,
+      current,
+      input.stepKey,
+      governingOrientation,
+      input.body,
+      completeStep,
+    );
   } catch (error) {
     if (error instanceof ValidationError) badRequest(error.code, error.message);
     throw error;

@@ -10,13 +10,17 @@ import discord
 import pytest
 
 from bill.components.profile import (
+    DM_STATUS_OPTIONS,
     ORIENTATION_LABELS,
     PROFILE_WIZARD_BUTTON_ACTIONS,
     PROFILE_WIZARD_SELECT_ACTIONS,
+    DmStatusSelect,
+    IdentityModal,
     MemberPresentation,
     ProfileSelectDynamic,
     ProfileWizardDynamic,
     _identity_values,
+    _partial_identity_values,
     profile_intro_view,
     profile_wizard_view,
     wizard_custom_id,
@@ -100,6 +104,29 @@ def draft(*, next_step: DraftStepKey | None = DraftStepKey.ORIENTATION) -> Profi
         created_at=None,
         updated_at=None,
         published_at=None,
+    )
+
+
+def identity_draft(
+    *,
+    status: DmStatus | None = None,
+    scope: DraftScope = DraftScope.GLOBAL,
+    mode: ServerProfileMode | None = None,
+    overrides: tuple[str, ...] = (),
+) -> ProfileDraft:
+    state = draft(next_step=DraftStepKey.IDENTITY)
+    return replace(
+        state,
+        target_scope=scope,
+        guild_id="2" if scope is DraftScope.SERVER else None,
+        server_mode=mode,
+        current_step=DraftStepKey.IDENTITY,
+        governing_orientation=Orientation.SWITCH_DOMME,
+        document=replace(
+            state.document,
+            dm_status=status,
+            overridden_fields=overrides,
+        ),
     )
 
 
@@ -558,12 +585,13 @@ def test_identity_payload_obeys_each_orientation_capability(
     stats: bool,
 ) -> None:
     values = _identity_values(
-        replace(draft(), governing_orientation=orientation),
+        replace(identity_draft(status=DmStatus.OPEN), governing_orientation=orientation),
         "She/Her",
         ",".join(honourifics),
         ",".join(labels),
         ",".join(aliases),
-        "open | on | hello",
+        "on",
+        "hello",
     )
 
     assert values["honourifics"] == honourifics
@@ -573,19 +601,232 @@ def test_identity_payload_obeys_each_orientation_capability(
 
 
 def test_linked_identity_can_inherit_every_field_sparsely() -> None:
-    linked = replace(
-        draft(),
-        target_scope=DraftScope.SERVER,
-        guild_id="2",
-        server_mode=ServerProfileMode.LINKED,
-        governing_orientation=Orientation.SWITCH_DOMME,
-    )
+    linked = identity_draft(scope=DraftScope.SERVER, mode=ServerProfileMode.LINKED)
 
-    values = _identity_values(linked, "", "", "", "", "inherit | inherit | ")
+    values = _identity_values(linked, "", "", "", "", "inherit", "")
 
     assert values["overrides"] == []
     assert values["dm_status"] is None
     assert values["bio"] is None
+
+
+def test_dm_status_menu_has_exact_options_and_no_implicit_global_default() -> None:
+    select = DmStatusSelect(identity_draft())
+
+    assert [(option.label, option.value) for option in select.options] == [
+        (label, status.value) for status, label, _ in DM_STATUS_OPTIONS
+    ]
+    assert not any(option.default for option in select.options)
+
+
+@pytest.mark.parametrize(
+    ("scope", "mode"),
+    [
+        (DraftScope.GLOBAL, None),
+        (DraftScope.SERVER, ServerProfileMode.INDEPENDENT),
+    ],
+)
+def test_non_linked_dm_status_menu_defaults_only_to_saved_choice(
+    scope: DraftScope,
+    mode: ServerProfileMode | None,
+) -> None:
+    select = DmStatusSelect(
+        identity_draft(status=DmStatus.AFTER_TRIBUTE, scope=scope, mode=mode)
+    )
+
+    assert len(select.options) == 4
+    assert [option.value for option in select.options if option.default] == ["after_tribute"]
+
+
+def test_linked_dm_status_menu_defaults_to_inheritance_or_explicit_override() -> None:
+    linked = identity_draft(scope=DraftScope.SERVER, mode=ServerProfileMode.LINKED)
+    inherited = DmStatusSelect(linked)
+    overridden = DmStatusSelect(
+        identity_draft(
+            status=DmStatus.CLOSED,
+            scope=DraftScope.SERVER,
+            mode=ServerProfileMode.LINKED,
+            overrides=("dm_status",),
+        )
+    )
+
+    assert [(option.label, option.value) for option in inherited.options][-1] == (
+        "Use global setting",
+        "inherit",
+    )
+    assert [option.value for option in inherited.options if option.default] == ["inherit"]
+    assert [option.value for option in overridden.options if option.default] == ["closed"]
+    assert "Use global setting keeps this server's DM status linked" in str(
+        profile_wizard_view(linked).to_components()
+    )
+
+
+def test_other_partial_identity_selection_does_not_default_dm_status() -> None:
+    values = _partial_identity_values(identity_draft(), "pronouns", ("She/Her",))
+
+    assert values["pronouns"] == ["She/Her"]
+    assert values["dm_status"] is None
+    assert values["complete"] is False
+
+
+def test_dm_status_partial_mutation_preserves_other_identity_fields() -> None:
+    state = identity_draft()
+    state = replace(
+        state,
+        document=replace(
+            state.document,
+            bio="Existing bio",
+            public_send_stats=True,
+            selections=ProfileSelections(("They/Them",), ("Goddess",), ("Brat",)),
+            aliases=("alias",),
+        ),
+    )
+
+    values = _partial_identity_values(state, "dm-status", ("by_request",))
+
+    assert values == {
+        "pronouns": ["They/Them"],
+        "honourifics": ["Goddess"],
+        "submissive_labels": ["Brat"],
+        "dm_status": "by_request",
+        "bio": "Existing bio",
+        "public_send_stats": True,
+        "aliases": ["alias"],
+        "complete": False,
+    }
+
+
+def test_linked_inherit_partial_removes_only_dm_status_override() -> None:
+    state = identity_draft(
+        status=DmStatus.CLOSED,
+        scope=DraftScope.SERVER,
+        mode=ServerProfileMode.LINKED,
+        overrides=("dm_status", "bio"),
+    )
+
+    values = _partial_identity_values(state, "dm-status", ("inherit",))
+
+    assert values["dm_status"] is None
+    assert values["overrides"] == ["bio"]
+    assert values["complete"] is False
+
+
+def test_identity_completion_requires_non_linked_dm_status() -> None:
+    with pytest.raises(ValueError, match="choose a DM status from the menu"):
+        _identity_values(identity_draft(), "", "", "", "", "off", "")
+
+
+def test_identity_modal_contains_no_dm_status_or_pipe_delimited_input() -> None:
+    modal = IdentityModal(identity_draft(status=DmStatus.OPEN), object())  # type: ignore[arg-type]
+    labels = [item.label for item in modal.children if isinstance(item, discord.ui.TextInput)]
+
+    assert labels == [
+        "Aliases, comma separated (- clears)",
+        "Public send stats: on/off/inherit",
+        "Bio (- clears; blank inherits when linked)",
+    ]
+    assert all("DM status" not in label and "|" not in label for label in labels)
+
+
+@pytest.mark.asyncio
+async def test_dm_status_select_persists_revision_bound_partial_mutation() -> None:
+    state = identity_draft()
+    calls: list[dict[str, object]] = []
+
+    class Worker:
+        async def get_draft(self, draft_id: str, *, owner_user_id: int) -> ProfileDraft:
+            assert (draft_id, owner_user_id) == ("draft_1", 1)
+            return state
+
+        async def update_draft_step(self, draft_id: str, **kwargs: object) -> ProfileDraft:
+            calls.append({"draft_id": draft_id, **kwargs})
+            return replace(
+                state,
+                revision=4,
+                document=replace(state.document, dm_status=DmStatus.CLOSED),
+            )
+
+    class Bot:
+        def require_worker(self) -> Worker:
+            return Worker()
+
+    class SelectResponse:
+        async def edit_message(self, *, view: discord.ui.LayoutView) -> None:
+            assert "Closed" in str(view.to_components())
+
+    interaction = SimpleNamespace(
+        client=Bot(),
+        user=SimpleNamespace(id=1, display_name="Display Name", display_avatar=None),
+        guild_id=None,
+        response=SelectResponse(),
+    )
+    item = discord.ui.Select(
+        custom_id=wizard_custom_id(state, "identity-dm-status"),
+        options=[discord.SelectOption(label="Closed", value="closed")],
+    )
+    item._values = ["closed"]
+    dynamic = ProfileSelectDynamic(item, "draft_1", "1", "2", 3, "identity-dm-status")
+
+    await dynamic.callback(interaction)  # type: ignore[arg-type]
+
+    assert calls == [
+        {
+            "draft_id": "draft_1",
+            "step": DraftStepKey.IDENTITY,
+            "owner_user_id": 1,
+            "expected_revision": 3,
+            "values": {
+                "pronouns": [],
+                "honourifics": [],
+                "submissive_labels": [],
+                "dm_status": "closed",
+                "bio": None,
+                "public_send_stats": False,
+                "aliases": [],
+                "complete": False,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dm_status_select_rejects_stale_revision_before_mutation() -> None:
+    state = identity_draft()
+    messages: list[str] = []
+
+    class Worker:
+        async def get_draft(self, _draft_id: str, *, owner_user_id: int) -> ProfileDraft:
+            assert owner_user_id == 1
+            return replace(state, revision=4)
+
+        async def update_draft_step(self, *_: object, **__: object) -> ProfileDraft:
+            raise AssertionError("stale controls must not mutate drafts")
+
+    class Bot:
+        def require_worker(self) -> Worker:
+            return Worker()
+
+    class StaleResponse:
+        async def send_message(self, content: str, *, ephemeral: bool) -> None:
+            assert ephemeral
+            messages.append(content)
+
+    interaction = SimpleNamespace(
+        client=Bot(),
+        user=SimpleNamespace(id=1),
+        guild_id=None,
+        response=StaleResponse(),
+    )
+    item = discord.ui.Select(
+        custom_id=wizard_custom_id(state, "identity-dm-status"),
+        options=[discord.SelectOption(label="Closed", value="closed")],
+    )
+    item._values = ["closed"]
+    dynamic = ProfileSelectDynamic(item, "draft_1", "1", "2", 3, "identity-dm-status")
+
+    await dynamic.callback(interaction)  # type: ignore[arg-type]
+
+    assert messages == ["That profile control is stale. Please use the latest wizard message."]
 
 
 def test_setup_custom_id_binds_initiator_guild_and_revision() -> None:

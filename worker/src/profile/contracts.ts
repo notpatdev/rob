@@ -192,7 +192,7 @@ export interface IdentityStepInput {
   readonly pronouns: string[];
   readonly honourifics: string[];
   readonly submissiveLabels: string[];
-  readonly dmStatus: DmStatus;
+  readonly dmStatus: DmStatus | null;
   readonly bio: string | null;
   readonly publicSendStats: boolean;
   readonly aliases: string[];
@@ -204,7 +204,11 @@ export interface IdentityStepInput {
  * (and vice versa), and so aliases/stats are only accepted where the
  * orientation supports them.
  */
-export function parseIdentityStep(body: unknown, orientation: Orientation): IdentityStepInput {
+export function parseIdentityStep(
+  body: unknown,
+  orientation: Orientation,
+  allowUnselectedDmStatus = false,
+): IdentityStepInput {
   const record = asRecord(body, "identity step body");
   const caps = ORIENTATION_CAPABILITIES[orientation];
 
@@ -218,8 +222,11 @@ export function parseIdentityStep(body: unknown, orientation: Orientation): Iden
     ? parseFixedMultiSelect(record.submissive_labels, SUBMISSIVE_LABELS, "submissive_labels")
     : (requireEmptyOrAbsent(record.submissive_labels, "submissive_labels", orientation), []);
 
-  if (!isDmStatus(record.dm_status)) {
+  if (record.dm_status !== null && !isDmStatus(record.dm_status)) {
     fail("invalid_dm_status", `dm_status must be one of: ${DM_STATUSES.join(", ")}`);
+  }
+  if (record.dm_status === null && !allowUnselectedDmStatus) {
+    fail("dm_status_required", "dm_status must be chosen before completing identity");
   }
 
   const bio = parseOptionalBio(record.bio);
@@ -236,7 +243,7 @@ export function parseIdentityStep(body: unknown, orientation: Orientation): Iden
     pronouns,
     honourifics,
     submissiveLabels,
-    dmStatus: record.dm_status,
+    dmStatus: record.dm_status as DmStatus | null,
     bio,
     publicSendStats,
     aliases,

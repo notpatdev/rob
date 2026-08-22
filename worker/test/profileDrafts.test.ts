@@ -65,7 +65,7 @@ async function lookup(guildId: string, userId: string) {
 }
 
 describe("profile draft lifecycle (global scope, domme orientation)", () => {
-  it("persists partial identity selections without completing the step", async () => {
+  it("persists partial identity selections without choosing a DM status or completing the step", async () => {
     const owner = "500000000000000090";
     const started = await startDraft({
       owner_user_id: owner,
@@ -86,7 +86,7 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
       pronouns: ["She/Her"],
       honourifics: [],
       submissive_labels: [],
-      dm_status: "open",
+      dm_status: null,
       bio: null,
       public_send_stats: false,
       aliases: [],
@@ -100,14 +100,36 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
       honourifics: [],
       submissive_labels: [],
     });
+    expect(partial.draft?.document.dm_status).toBeNull();
 
-    const completed = await putStep(draftId, "identity", {
+    const withDmStatus = await putStep(draftId, "identity", {
       owner_user_id: owner,
       expected_revision: 2,
+      complete: false,
       pronouns: ["She/Her"],
       honourifics: [],
       submissive_labels: [],
-      dm_status: "open",
+      dm_status: "by_request",
+      bio: null,
+      public_send_stats: false,
+      aliases: [],
+    });
+    expect(withDmStatus.status).toBe(200);
+    expect(withDmStatus.draft?.next_step).toBe("identity");
+    expect(withDmStatus.draft?.document.dm_status).toBe("by_request");
+    expect(withDmStatus.draft?.document.selections).toEqual({
+      pronouns: ["She/Her"],
+      honourifics: [],
+      submissive_labels: [],
+    });
+
+    const completed = await putStep(draftId, "identity", {
+      owner_user_id: owner,
+      expected_revision: 3,
+      pronouns: ["She/Her"],
+      honourifics: [],
+      submissive_labels: [],
+      dm_status: "by_request",
       bio: null,
       public_send_stats: false,
       aliases: [],

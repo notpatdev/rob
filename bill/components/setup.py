@@ -6,6 +6,7 @@ import re
 from typing import TYPE_CHECKING, cast
 
 import discord
+from discord import app_commands
 
 from bill.components.custom_ids import (
     decode_resource_id,
@@ -27,6 +28,32 @@ def missing_channel_permissions(permissions: discord.Permissions) -> tuple[str, 
         "read_message_history": "Read Message History",
     }
     return tuple(label for name, label in required.items() if not getattr(permissions, name))
+
+
+async def _resolve_selected_text_channel(
+    selected: app_commands.AppCommandChannel | app_commands.AppCommandThread,
+    *,
+    guild: discord.Guild,
+    client: discord.Client,
+) -> discord.TextChannel | None:
+    if (
+        not isinstance(selected, app_commands.AppCommandChannel)
+        or selected.guild_id != guild.id
+        or selected.type is not discord.ChannelType.text
+    ):
+        return None
+
+    channel = guild.get_channel(selected.id)
+    if channel is None:
+        channel = await client.fetch_channel(selected.id)
+
+    if (
+        not isinstance(channel, discord.TextChannel)
+        or channel.guild.id != guild.id
+        or channel.type is not discord.ChannelType.text
+    ):
+        return None
+    return channel
 
 
 def setup_custom_id(session: GuildSetupSession, action: str) -> str:
@@ -161,12 +188,23 @@ class SetupChannelDynamic(
                 "That setup control is stale. Please use the latest message.", ephemeral=True
             )
             return
-        channel = self.item.values[0]
-        if (
-            not isinstance(channel, discord.TextChannel)
-            or interaction.guild is None
-            or interaction.guild.me is None
-        ):
+        if interaction.guild is None or interaction.guild.me is None:
+            await interaction.response.send_message(
+                "Please choose a standard text channel.", ephemeral=True
+            )
+            return
+        try:
+            channel = await _resolve_selected_text_channel(
+                self.item.values[0],
+                guild=interaction.guild,
+                client=interaction.client,
+            )
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "Bill could not load that channel. Please try again.", ephemeral=True
+            )
+            return
+        if channel is None:
             await interaction.response.send_message(
                 "Please choose a standard text channel.", ephemeral=True
             )

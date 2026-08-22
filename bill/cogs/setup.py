@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bill.components.setup import missing_channel_permissions, setup_view
+from bill.components.setup import guild_presentation, missing_channel_permissions, setup_view
 from bill.worker_client import WorkerAPIError
 
 if TYPE_CHECKING:
@@ -50,7 +50,13 @@ class BillSetupCog(commands.Cog):
             )
             return
         # It is public for moderator visibility, while callback authorization is initiator-bound.
-        await interaction.response.send_message(view=setup_view(started.session), ephemeral=False)
+        await interaction.response.send_message(
+            view=setup_view(
+                started.session,
+                presentation=guild_presentation(interaction.guild, interaction.user),
+            ),
+            ephemeral=False,
+        )
 
 
 __all__ = ["BillSetupCog", "missing_channel_permissions"]

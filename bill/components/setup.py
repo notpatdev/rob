@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import discord
@@ -18,6 +19,31 @@ from bill.worker_client import GuildSetupSession, WorkerAPIError
 
 if TYPE_CHECKING:
     from bill.bot import BillBot
+
+
+@dataclass(frozen=True, slots=True)
+class GuildPresentation:
+    guild_name: str
+    initiator_name: str
+    icon_url: str | None = None
+
+
+def guild_presentation(guild: object, initiator: object) -> GuildPresentation:
+    """Read transient Discord names/assets without persisting them in setup state."""
+    guild_name = str(getattr(guild, "name", None) or "This server")
+    initiator_name = str(
+        getattr(initiator, "display_name", None)
+        or getattr(initiator, "global_name", None)
+        or getattr(initiator, "name", None)
+        or "Server administrator"
+    )
+    icon = getattr(guild, "icon", None)
+    icon_url = getattr(icon, "url", None)
+    return GuildPresentation(guild_name, initiator_name, str(icon_url) if icon_url else None)
+
+
+def _escape(value: str, limit: int = 100) -> str:
+    return discord.utils.escape_mentions(discord.utils.escape_markdown(value))[:limit]
 
 
 def missing_channel_permissions(permissions: discord.Permissions) -> tuple[str, ...]:
@@ -66,21 +92,53 @@ def setup_custom_id(session: GuildSetupSession, action: str) -> str:
     return custom_id
 
 
-def setup_view(session: GuildSetupSession) -> discord.ui.LayoutView:
+def setup_view(
+    session: GuildSetupSession,
+    *,
+    presentation: GuildPresentation | None = None,
+) -> discord.ui.LayoutView:
+    presentation = presentation or GuildPresentation("This server", "Server administrator")
     view = discord.ui.LayoutView(timeout=None)
     container = discord.ui.Container(accent_color=discord.Color.blurple())
-    container.add_item(discord.ui.TextDisplay("## Set up Bill"))
+    container.add_item(discord.ui.TextDisplay("-# Bill Server Setup"))
+    title = f"### {_escape(presentation.guild_name)}"
+    current_step = (
+        "Complete"
+        if session.status == "completed"
+        else _escape(session.current_step.replace("_", " ").title())
+    )
+    metadata = (
+        f"-# Started by: {_escape(presentation.initiator_name)}",
+        f"-# Current step: {current_step}",
+    )
+    if presentation.icon_url:
+        container.add_item(
+            discord.ui.Section(
+                discord.ui.TextDisplay(title),
+                *(discord.ui.TextDisplay(row) for row in metadata),
+                accessory=discord.ui.Thumbnail(
+                    presentation.icon_url,
+                    description=f"{_escape(presentation.guild_name)} server icon",
+                ),
+            )
+        )
+    else:
+        container.add_item(discord.ui.TextDisplay("\n".join((title, *metadata))))
+    container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
     if session.status == "completed":
         container.add_item(
             discord.ui.TextDisplay(
-                f"Bill is configured to post sends in <#{session.selected_channel_id}>."
+                f"> **Posting channel:** <#{session.selected_channel_id}>\n"
+                "> Bill is ready to post new Throne sends for this server."
             )
         )
     elif session.selected_channel_id:
         container.add_item(
-            discord.ui.TextDisplay(f"-# Channel: <#{session.selected_channel_id}> (Complete)")
+            discord.ui.TextDisplay(
+                f"> **Selected channel:** <#{session.selected_channel_id}>\n"
+                "> Confirm to make this the public destination for new Throne sends."
+            )
         )
-        container.add_item(discord.ui.TextDisplay("### Confirm this channel"))
         container.add_item(
             discord.ui.ActionRow(
                 discord.ui.Button(
@@ -91,7 +149,12 @@ def setup_view(session: GuildSetupSession) -> discord.ui.LayoutView:
             )
         )
     else:
-        container.add_item(discord.ui.TextDisplay("### Choose where Bill posts Throne sends"))
+        container.add_item(
+            discord.ui.TextDisplay(
+                "Choose the public text channel where Bill should post new Throne sends. "
+                "You can review the choice before confirming."
+            )
+        )
         container.add_item(
             discord.ui.ActionRow(
                 discord.ui.ChannelSelect(
@@ -229,7 +292,12 @@ class SetupChannelDynamic(
                 f"Bill could not save that channel: {exc}", ephemeral=True
             )
             return
-        await interaction.response.edit_message(view=setup_view(updated))
+        await interaction.response.edit_message(
+            view=setup_view(
+                updated,
+                presentation=guild_presentation(interaction.guild, interaction.user),
+            )
+        )
 
 
 class SetupCompleteDynamic(
@@ -324,4 +392,9 @@ class SetupCompleteDynamic(
                 f"Bill could not complete setup: {exc}", ephemeral=True
             )
             return
-        await interaction.response.edit_message(view=setup_view(completed.session))
+        await interaction.response.edit_message(
+            view=setup_view(
+                completed.session,
+                presentation=guild_presentation(interaction.guild, interaction.user),
+            )
+        )

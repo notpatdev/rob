@@ -16,9 +16,11 @@ inherited links while retaining the rest.
 ## Private setup
 
 Missing self profiles start with a normal ephemeral guild prompt. After the
-member confirms, Bill sends one normal DM introduction and then a direct
-Components V2 wizard. Missing profiles for an explicitly selected other member
-never start setup.
+member confirms, Bill sends a friendly normal DM introduction with a durable,
+user-bound **Start** button. Start replaces the introduction with the Components
+V2 wizard; because the control reloads the saved draft from D1, it continues to
+work after a bot restart. Missing profiles for an explicitly selected other
+member never start setup.
 
 Drafts are private D1 records. Each mutation carries the last observed revision;
 stale, foreign-user, wrong-guild, and completed controls fail safely.
@@ -43,10 +45,13 @@ executed. The Worker validates DNS and every redirect, blocks private/reserved
 destinations, enforces a five-second deadline and 512 KiB body limit, and stores
 only normalized candidates rather than raw HTML.
 
-Public profile cards do not include webhook URLs, route secrets, creator IDs,
-or other credentials. Payment and social buttons ask the Worker for the current
-guild-resolved profile and open ephemeral link details for the viewer. A Throne
-webhook URL appears only to its owner when first issued or explicitly rotated.
+Public profile cards use the member's current Discord display name and avatar,
+compact orientation and DM metadata, and only non-empty profile details. They do
+not include webhook URLs, route secrets, creator IDs, or other credentials.
+Payment and social buttons ask the Worker for the current guild-resolved profile
+and open ephemeral link details with up to five direct HTTPS buttons per row. A
+Throne webhook URL appears only to its owner when first issued or explicitly
+rotated.
 
 ## Send statistics
 

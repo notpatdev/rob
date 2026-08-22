@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import re
 from typing import TYPE_CHECKING, cast
+from urllib.parse import urlsplit
 
 import discord
 
-from bill.components.profile import ORIENTATION_LABELS, profile_wizard_view
+from bill.components.profile import (
+    ORIENTATION_LABELS,
+    MemberPresentation,
+    member_presentation,
+    profile_intro_view,
+)
 from bill.embeds import format_minor_amount
 from bill.worker_client import (
     DraftScope,
     LinkType,
+    ProfileLink,
     PublicProfile,
     ServerProfileMode,
     WorkerAPIError,
@@ -25,47 +32,113 @@ def _escape(value: str, limit: int = 300) -> str:
     return discord.utils.escape_mentions(discord.utils.escape_markdown(value))[:limit]
 
 
+def _profile_section(
+    presentation: MemberPresentation,
+    *metadata: str,
+) -> discord.ui.Section | discord.ui.TextDisplay:
+    title = f"### {_escape(presentation.display_name, 80)}"
+    rows = tuple(discord.ui.TextDisplay(row) for row in metadata)
+    if presentation.avatar_url:
+        return discord.ui.Section(
+            discord.ui.TextDisplay(title),
+            *rows,
+            accessory=discord.ui.Thumbnail(
+                presentation.avatar_url,
+                description=f"{_escape(presentation.display_name, 80)}'s avatar",
+            ),
+        )
+    return discord.ui.TextDisplay("\n".join((title, *metadata)))
+
+
+def _blockquote(label: str, values: str) -> str:
+    return "\n".join(f"> **{label}:** {line}" for line in values.splitlines())
+
+
+def _is_https_url(value: str) -> bool:
+    parsed = urlsplit(value)
+    return parsed.scheme == "https" and bool(parsed.netloc)
+
+
+def profile_links_view(
+    links: tuple[ProfileLink, ...],
+    *,
+    kind: LinkType,
+    presentation: MemberPresentation,
+) -> discord.ui.LayoutView:
+    """Render one viewer-safe link detail surface with compact HTTPS button rows."""
+    title = "Payment Links" if kind is LinkType.PAYMENT else "Socials"
+    view = discord.ui.LayoutView(timeout=180)
+    container = discord.ui.Container()
+    container.add_item(discord.ui.TextDisplay(f"-# Bill Profile · {title}"))
+    container.add_item(
+        _profile_section(
+            presentation,
+            f"-# {title} shared in this server",
+        )
+    )
+    container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+    buttons = [
+        discord.ui.Button(label=_escape(link.public_label, 80), url=link.normalized_url)
+        for link in links[:12]
+        if link.link_type is kind and _is_https_url(link.normalized_url)
+    ]
+    for index in range(0, len(buttons), 5):
+        container.add_item(discord.ui.ActionRow(*buttons[index : index + 5]))
+    view.add_item(container)
+    return view
+
+
 def public_profile_view(
     profile: PublicProfile,
     *,
     guild_id: int | str,
     owner_view: bool,
-    display_name: str | None = None,
+    presentation: MemberPresentation,
 ) -> discord.ui.LayoutView:
     """Render public data only; webhook identifiers and URLs never enter this view."""
     view = discord.ui.LayoutView(timeout=None)
     container = discord.ui.Container(accent_color=discord.Color.blurple())
-    title = f"{ORIENTATION_LABELS[profile.orientation]} profile"
-    if display_name:
-        title = f"{_escape(display_name, 80)} — {title}"
-    container.add_item(discord.ui.TextDisplay(f"## {title}"))
-    identity = ", ".join(
-        (
-            *profile.selections.pronouns,
-            *profile.selections.honourifics,
-            *profile.selections.submissive_labels,
-        )
-    )
-    if identity:
-        container.add_item(discord.ui.TextDisplay(_escape(identity)))
+    container.add_item(discord.ui.TextDisplay("-# Bill Profile"))
     container.add_item(
-        discord.ui.TextDisplay(
-            f"**DMs:** {_escape(profile.dm_status.value.replace('_', ' ').title())}"
+        _profile_section(
+            presentation,
+            f"-# Orientation: {_escape(ORIENTATION_LABELS[profile.orientation], 80)}",
+            f"-# DMs: {_escape(profile.dm_status.value.replace('_', ' ').title(), 40)}",
         )
     )
+    container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+    identity_rows = []
+    for label, values in (
+        ("Pronouns", profile.selections.pronouns),
+        ("Honourifics", profile.selections.honourifics),
+        ("Submissive labels", profile.selections.submissive_labels),
+    ):
+        if values:
+            identity_rows.append(_blockquote(label, _escape(", ".join(values), 300)))
+    if identity_rows:
+        container.add_item(discord.ui.TextDisplay("\n".join(identity_rows)))
     if profile.bio:
-        container.add_item(discord.ui.TextDisplay(_escape(profile.bio)))
+        container.add_item(
+            discord.ui.TextDisplay(
+                "\n".join(
+                    f"> {line}" for line in _escape(profile.bio, 300).splitlines()
+                )
+            )
+        )
     if profile.aliases:
-        aliases = ", ".join(f"@{alias}" for alias in profile.aliases)
-        container.add_item(discord.ui.TextDisplay(f"**Aliases:** {_escape(aliases)}"))
+        aliases = ", ".join(profile.aliases)
+        container.add_item(discord.ui.TextDisplay(_blockquote("Aliases", _escape(aliases))))
     if profile.throne_connected:
-        container.add_item(discord.ui.TextDisplay("Throne: Connected"))
+        container.add_item(discord.ui.TextDisplay("> **Throne:** Connected"))
     if profile.public_send_stats and profile.send_stats:
-        totals = ", ".join(
-            f"{format_minor_amount(stat.total_amount_minor, stat.currency)} ({stat.count})"
+        totals = "\n".join(
+            f"> **{_escape(stat.currency.upper(), 10)}:** "
+            f"{_escape(format_minor_amount(stat.total_amount_minor, stat.currency), 80)} "
+            f"across {stat.count} send{'s' if stat.count != 1 else ''}"
             for stat in profile.send_stats
         )
-        container.add_item(discord.ui.TextDisplay(f"**Public send stats:** {_escape(totals, 500)}"))
+        container.add_item(discord.ui.TextDisplay(totals))
     controls: list[discord.ui.Button] = []
     if any(link.link_type is LinkType.PAYMENT for link in profile.links):
         controls.append(
@@ -92,6 +165,7 @@ def public_profile_view(
             )
         )
     if controls:
+        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
         container.add_item(discord.ui.ActionRow(*controls))
     view.add_item(container)
     return view
@@ -133,29 +207,33 @@ class ProfileLinksDynamic(
         links = (
             ()
             if result.profile is None
-            else tuple(link for link in result.profile.links if link.link_type is self.kind)
+            else tuple(
+                link
+                for link in result.profile.links
+                if link.link_type is self.kind and _is_https_url(link.normalized_url)
+            )
         )
         if not links:
             await interaction.response.send_message(
                 "There are no public links in this section.", ephemeral=True
             )
             return
-        view = discord.ui.LayoutView(timeout=180)
-        container = discord.ui.Container()
-        container.add_item(
-            discord.ui.TextDisplay(
-                f"## {'Payment Links' if self.kind is LinkType.PAYMENT else 'Socials'}"
-            )
+        owner = None
+        if interaction.guild is not None and str(interaction.guild.id) == self.guild_id:
+            owner = interaction.guild.get_member(int(self.owner_id))
+        presentation = (
+            member_presentation(owner)
+            if owner is not None
+            else MemberPresentation("Bill member")
         )
-        # Discord link buttons require a direct HTTPS URL; all URLs were validated by Worker.
-        for link in links[:12]:
-            container.add_item(
-                discord.ui.ActionRow(
-                    discord.ui.Button(label=_escape(link.public_label, 80), url=link.normalized_url)
-                )
-            )
-        view.add_item(container)
-        await interaction.response.send_message(view=view, ephemeral=True)
+        await interaction.response.send_message(
+            view=profile_links_view(
+                links,
+                kind=self.kind,
+                presentation=presentation,
+            ),
+            ephemeral=True,
+        )
 
 
 class ProfileEditDynamic(
@@ -207,8 +285,11 @@ class ProfileEditDynamic(
                 ),
             )
             dm = await interaction.user.create_dm()
-            await dm.send("Your Bill profile editor is private. Your saved draft is below.")
-            await dm.send(view=profile_wizard_view(started.draft))
+            await dm.send(
+                "Your Bill profile editor is private. Changes are saved as you go, and "
+                "nothing is published until you choose **Publish**.",
+                view=profile_intro_view(started.draft),
+            )
         except discord.Forbidden:
             await interaction.response.send_message(
                 "I couldn't DM you. Please enable direct messages from server members, "

@@ -1,0 +1,23 @@
+name = "bill-worker"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Replace database_id with the ID returned by `wrangler d1 create bill`.
+[[d1_databases]]
+binding = "DB"
+database_name = "bill"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[vars]
+PUBLIC_BASE_URL = "https://usebill.dev"
+THRONE_TEST_GIFTER_USERNAMES = ""
+NOTIFICATION_MAX_ATTEMPTS = "5"
+NOTIFICATION_BACKOFF_BASE_SECONDS = "30"
+NOTIFICATION_BACKOFF_MAX_SECONDS = "900"
+MAX_TIMESTAMP_SKEW_SECONDS = "300"
+
+# Secrets (set with `wrangler secret put`, never committed):
+#   BILL_BOT_API_TOKEN
+#   THRONE_PUBLIC_KEY_PEM

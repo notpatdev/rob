@@ -1,0 +1,8 @@
+# Copy to .dev.vars for local `wrangler dev` / `npm run test` runs.
+# Never commit the real .dev.vars file (it is gitignored).
+
+# Long random token the Discord bot sends as `Authorization: Bearer <token>`.
+BILL_BOT_API_TOKEN=dev-local-bot-token-change-me
+
+# Throne's current Ed25519 webhook signing public key, PEM-encoded (SPKI).
+THRONE_PUBLIC_KEY_PEM="-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n-----END PUBLIC KEY-----"

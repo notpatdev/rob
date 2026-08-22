@@ -1,0 +1,48 @@
+name: Bug report
+description: Report reproducible behavior that is incorrect
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Bill. Do not include tokens, private keys,
+        real private server details, or other secrets.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What happened, and who or what was affected?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest safe sequence that demonstrates the problem.
+      placeholder: |
+        1. Configure ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: What observable outcomes would confirm the bug is fixed?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional safe context
+      description: Add sanitized logs or screenshots if useful. Remove secrets and private IDs.

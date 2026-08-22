@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
 
 import discord
@@ -10,12 +11,18 @@ import pytest
 
 from bill.components.profile import (
     ORIENTATION_LABELS,
+    PROFILE_WIZARD_BUTTON_ACTIONS,
+    PROFILE_WIZARD_SELECT_ACTIONS,
+    MemberPresentation,
+    ProfileSelectDynamic,
+    ProfileWizardDynamic,
     _identity_values,
+    profile_intro_view,
     profile_wizard_view,
     wizard_custom_id,
 )
-from bill.components.public_profile import public_profile_view
-from bill.components.setup import setup_custom_id, setup_view
+from bill.components.public_profile import profile_links_view, public_profile_view
+from bill.components.setup import GuildPresentation, setup_custom_id, setup_view
 from bill.worker_client import (
     CreateLinkImportResult,
     DmStatus,
@@ -31,6 +38,7 @@ from bill.worker_client import (
     ProfileLink,
     ProfileSelections,
     PublicProfile,
+    SendStat,
     ServerProfileMode,
     WorkerClient,
 )
@@ -92,6 +100,61 @@ def draft(*, next_step: DraftStepKey | None = DraftStepKey.ORIENTATION) -> Profi
         created_at=None,
         updated_at=None,
         published_at=None,
+    )
+
+
+def _all_items(view: discord.ui.LayoutView) -> list[discord.ui.Item[Any]]:
+    return list(view.walk_children())
+
+
+def _rows(view: discord.ui.LayoutView) -> list[discord.ui.ActionRow[Any]]:
+    return [
+        item
+        for item in _all_items(view)
+        if isinstance(item, discord.ui.ActionRow)
+    ]
+
+
+def _profile(*, empty: bool = False) -> PublicProfile:
+    return PublicProfile(
+        DraftScope.GLOBAL,
+        None,
+        "1",
+        Orientation.SWITCH_DOMME,
+        DmStatus.OPEN,
+        None if empty else "@everyone **not markup**",
+        not empty,
+        ProfileSelections(
+            () if empty else ("She/Her",),
+            () if empty else ("Goddess",),
+            () if empty else ("Brat",),
+        ),
+        () if empty else ("safe_alias",),
+        ()
+        if empty
+        else (
+            ProfileLink(
+                "payment",
+                "Throne",
+                "Tribute",
+                None,
+                "https://throne.com/a",
+                LinkType.PAYMENT,
+            ),
+            ProfileLink(
+                "social",
+                "Bluesky",
+                "Social",
+                None,
+                "https://bsky.app/profile/example.com",
+                LinkType.SOCIAL,
+            ),
+        ),
+        None if empty else "payment",
+        not empty,
+        None if empty else (SendStat("USD", 2, 1234), SendStat("EUR", 1, 500)),
+        1,
+        None,
     )
 
 
@@ -187,47 +250,295 @@ async def test_link_import_creation_uses_the_mutation_revision(
 
 
 def test_orientation_wizard_uses_v2_container_and_all_four_options() -> None:
-    view = profile_wizard_view(draft())
+    view = profile_wizard_view(
+        draft(),
+        presentation=MemberPresentation("Display Name", "https://cdn.example/avatar.png"),
+    )
 
     assert isinstance(view, discord.ui.LayoutView)
     assert len(ORIENTATION_LABELS) == 4
     encoded = str(view.to_components())
+    assert "-# Bill Profile Setup" in encoded
+    sections = [
+        item for item in _all_items(view) if isinstance(item, discord.ui.Section)
+    ]
+    assert len(sections) == 1
+    assert isinstance(sections[0].accessory, discord.ui.Thumbnail)
     assert "bill:p:rdraft_1:1:2:3:orientation" in encoded
 
 
 def test_public_profile_escapes_bio_and_exposes_only_safe_link_controls() -> None:
-    profile = PublicProfile(
-        DraftScope.GLOBAL,
-        None,
-        "1",
-        Orientation.DOMME,
-        DmStatus.OPEN,
-        "@everyone **not markup**",
-        False,
-        ProfileSelections(("She/Her",), (), ()),
-        (),
-        (ProfileLink("link", "Throne", "Tribute", None, "https://throne.com/a", LinkType.PAYMENT),),
-        "link",
-        True,
-        None,
-        1,
-        None,
+    view = public_profile_view(
+        _profile(),
+        guild_id=2,
+        owner_view=True,
+        presentation=MemberPresentation(
+            "Display @everyone",
+            "https://cdn.example/avatar.png",
+        ),
     )
-
-    view = public_profile_view(profile, guild_id=2, owner_view=True)
 
     encoded = str(view.to_components())
+    assert "-# Bill Profile" in encoded
     assert "Payment Links" in encoded
+    assert "Socials" in encoded
     assert "Edit" in encoded
     assert "@everyone" not in encoded
+    assert "Pronouns" in encoded
+    assert "Honourifics" in encoded
+    assert "Submissive labels" in encoded
+    assert "Aliases" in encoded
+    assert "Throne" in encoded
+    assert "USD" in encoded and "EUR" in encoded
+    assert len(
+        [item for item in _all_items(view) if isinstance(item, discord.ui.Separator)]
+    ) == 2
+    section = next(item for item in _all_items(view) if isinstance(item, discord.ui.Section))
+    assert isinstance(section.accessory, discord.ui.Thumbnail)
 
 
-def test_setup_view_collapses_completed_channel() -> None:
-    session = GuildSetupSession(
-        "setup", "2", "1", "active", "confirm", "3", 4, None, None, None, None, None
+def test_public_profile_hides_empty_sections_and_viewer_edit_control() -> None:
+    view = public_profile_view(
+        _profile(empty=True),
+        guild_id=2,
+        owner_view=False,
+        presentation=MemberPresentation("Display Name"),
     )
 
-    assert "Confirm setup" in str(setup_view(session).to_components())
+    encoded = str(view.to_components())
+    for hidden in (
+        "Pronouns",
+        "Honourifics",
+        "Submissive labels",
+        "Aliases",
+        "Throne",
+        "Edit",
+    ):
+        assert hidden not in encoded
+    assert not any(isinstance(item, discord.ui.Thumbnail) for item in _all_items(view))
+    assert len(
+        [item for item in _all_items(view) if isinstance(item, discord.ui.Separator)]
+    ) == 1
+
+
+def test_public_profile_viewer_keeps_link_controls_without_owner_edit() -> None:
+    view = public_profile_view(
+        _profile(),
+        guild_id=2,
+        owner_view=False,
+        presentation=MemberPresentation("Display Name"),
+    )
+
+    encoded = str(view.to_components())
+    assert "Payment Links" in encoded and "Socials" in encoded
+    assert "'label': 'Edit'" not in encoded
+
+
+@pytest.mark.parametrize("kind", [LinkType.PAYMENT, LinkType.SOCIAL])
+def test_link_detail_uses_member_section_and_groups_five_buttons_per_row(
+    kind: LinkType,
+) -> None:
+    links = tuple(
+        ProfileLink(
+            f"link-{index}",
+            "Platform",
+            f"Link {index}",
+            None,
+            f"https://example.com/{index}",
+            kind,
+        )
+        for index in range(12)
+    )
+
+    view = profile_links_view(
+        links,
+        kind=kind,
+        presentation=MemberPresentation("Display Name", "https://cdn.example/avatar.png"),
+    )
+
+    assert [len(row.children) for row in _rows(view)] == [5, 5, 2]
+    assert any(isinstance(item, discord.ui.Section) for item in _all_items(view))
+    assert any(isinstance(item, discord.ui.Thumbnail) for item in _all_items(view))
+    assert "<:" not in str(view.to_components())
+    assert "<a:" not in str(view.to_components())
+
+
+def test_link_detail_rejects_non_https_buttons_and_handles_missing_avatar() -> None:
+    links = (
+        ProfileLink("bad", "Bad", "Unsafe", None, "http://example.com", LinkType.SOCIAL),
+        ProfileLink("good", "Good", "Safe", None, "https://example.com", LinkType.SOCIAL),
+    )
+
+    view = profile_links_view(
+        links,
+        kind=LinkType.SOCIAL,
+        presentation=MemberPresentation("Bill member"),
+    )
+
+    assert [len(row.children) for row in _rows(view)] == [1]
+    assert "Unsafe" not in str(view.to_components())
+    assert not any(isinstance(item, discord.ui.Thumbnail) for item in _all_items(view))
+
+
+@pytest.mark.parametrize("step", list(DraftStepKey))
+def test_every_profile_wizard_state_has_compact_v2_structure(step: DraftStepKey) -> None:
+    state = replace(
+        draft(next_step=step),
+        current_step=step,
+        governing_orientation=Orientation.SWITCH_DOMME,
+        steps=(
+            DraftStep(DraftStepKey.ORIENTATION, "completed", None),
+            DraftStep(step, "pending", None),
+        ),
+    )
+
+    view = profile_wizard_view(
+        state,
+        presentation=MemberPresentation("Display Name", "https://cdn.example/avatar.png"),
+    )
+
+    encoded = str(view.to_components())
+    assert "-# Bill Profile Setup" in encoded
+    assert "Current step" in encoded
+    assert "Orientation" in encoded
+    assert any(isinstance(item, discord.ui.Section) for item in _all_items(view))
+    assert len(_all_items(view)) <= 40
+    assert all(len(row.children) <= 5 for row in _rows(view))
+    assert "<:" not in encoded and "<a:" not in encoded
+
+
+def test_profile_wizard_gracefully_handles_missing_avatar() -> None:
+    view = profile_wizard_view(
+        draft(),
+        presentation=MemberPresentation("Display Name"),
+    )
+
+    assert "Display Name" in str(view.to_components())
+    assert not any(isinstance(item, discord.ui.Thumbnail) for item in _all_items(view))
+
+
+def test_profile_wizard_collapses_throne_state_without_exposing_creator_id() -> None:
+    state = replace(
+        draft(next_step=DraftStepKey.REVIEW),
+        current_step=DraftStepKey.REVIEW,
+        governing_orientation=Orientation.DOMME,
+        steps=(DraftStep(DraftStepKey.THRONE, "completed", None),),
+        document=replace(draft().document, throne_creator_id="private_creator_id"),
+    )
+
+    encoded = str(profile_wizard_view(state).to_components())
+
+    assert "Throne connected" in encoded
+    assert "private_creator_id" not in encoded
+
+
+def test_profile_intro_start_control_is_persistent_and_disjoint() -> None:
+    view = profile_intro_view(draft())
+    button = view.children[0]
+
+    assert view.timeout is None
+    assert isinstance(button, discord.ui.Button)
+    assert button.label == "Start"
+    assert button.custom_id == wizard_custom_id(draft(), "start")
+    assert _matching_profile_dispatchers(button.custom_id) == [ProfileWizardDynamic]
+
+
+@pytest.mark.asyncio
+async def test_profile_start_reloads_draft_after_restart_before_rendering() -> None:
+    loaded: list[tuple[str, int]] = []
+
+    class Worker:
+        async def get_draft(self, draft_id: str, *, owner_user_id: int) -> ProfileDraft:
+            loaded.append((draft_id, owner_user_id))
+            return draft()
+
+    class Bot:
+        def require_worker(self) -> Worker:
+            return Worker()
+
+    class StartResponse:
+        def __init__(self) -> None:
+            self.content: str | None = "unchanged"
+            self.view: discord.ui.LayoutView | None = None
+
+        async def edit_message(
+            self,
+            *,
+            content: str | None,
+            view: discord.ui.LayoutView,
+        ) -> None:
+            self.content, self.view = content, view
+
+    response = StartResponse()
+    interaction = SimpleNamespace(
+        client=Bot(),
+        user=SimpleNamespace(id=1, display_name="Display Name", display_avatar=None),
+        guild_id=None,
+        message=object(),
+        response=response,
+    )
+    item = discord.ui.Button(
+        label="Start",
+        custom_id=wizard_custom_id(draft(), "start"),
+    )
+    dynamic = ProfileWizardDynamic(item, "draft_1", "1", "2", 3, "start")
+
+    await dynamic.callback(interaction)  # type: ignore[arg-type]
+
+    assert loaded == [("draft_1", 1)]
+    assert response.content is None
+    assert response.view is not None
+    assert "-# Bill Profile Setup" in str(response.view.to_components())
+
+
+@pytest.mark.parametrize(
+    ("status", "step", "channel_id", "expected"),
+    [
+        ("active", "select_channel", None, "Select a text channel"),
+        ("active", "confirm", "3", "Confirm setup"),
+        ("completed", "complete", "3", "Bill is ready"),
+    ],
+)
+def test_every_setup_state_has_server_section_and_expected_controls(
+    status: str,
+    step: str,
+    channel_id: str | None,
+    expected: str,
+) -> None:
+    session = GuildSetupSession(
+        "setup", "2", "1", status, step, channel_id, 4, None, None, None, None, None
+    )
+
+    view = setup_view(
+        session,
+        presentation=GuildPresentation(
+            "Server Name",
+            "Admin Name",
+            "https://cdn.example/icon.png",
+        ),
+    )
+
+    encoded = str(view.to_components())
+    assert "-# Bill Server Setup" in encoded
+    assert expected in encoded
+    section = next(item for item in _all_items(view) if isinstance(item, discord.ui.Section))
+    assert isinstance(section.accessory, discord.ui.Thumbnail)
+    assert all(len(row.children) <= 5 for row in _rows(view))
+    assert "<:" not in encoded and "<a:" not in encoded
+
+
+def test_setup_view_gracefully_handles_missing_guild_icon() -> None:
+    session = GuildSetupSession(
+        "setup", "2", "1", "active", "select_channel", None, 4, None, None, None, None, None
+    )
+
+    view = setup_view(
+        session,
+        presentation=GuildPresentation("Server Name", "Admin Name"),
+    )
+
+    assert "Server Name" in str(view.to_components())
+    assert not any(isinstance(item, discord.ui.Thumbnail) for item in _all_items(view))
 
 
 @pytest.mark.parametrize(
@@ -299,6 +610,41 @@ def test_setup_custom_id_binds_initiator_guild_and_revision() -> None:
     assert len(custom_id) <= 100
 
 
+def _matching_profile_dispatchers(custom_id: str) -> list[type[discord.ui.DynamicItem]]:
+    dispatchers = [ProfileWizardDynamic, ProfileSelectDynamic]
+    return [
+        dispatcher
+        for dispatcher in dispatchers
+        if dispatcher.__discord_ui_compiled_template__.fullmatch(custom_id)
+    ]
+
+
+@pytest.mark.parametrize("action", PROFILE_WIZARD_SELECT_ACTIONS)
+def test_profile_select_actions_match_only_select_dispatcher(action: str) -> None:
+    custom_id = wizard_custom_id(draft(), action)
+
+    assert _matching_profile_dispatchers(custom_id) == [ProfileSelectDynamic]
+
+
+@pytest.mark.parametrize("action", PROFILE_WIZARD_BUTTON_ACTIONS)
+def test_profile_button_actions_match_only_button_dispatcher(action: str) -> None:
+    custom_id = wizard_custom_id(draft(), action)
+
+    assert _matching_profile_dispatchers(custom_id) == [ProfileWizardDynamic]
+
+
+def test_every_emittable_profile_action_has_exactly_one_dispatcher() -> None:
+    actions = (*PROFILE_WIZARD_BUTTON_ACTIONS, *PROFILE_WIZARD_SELECT_ACTIONS)
+
+    assert len(actions) == len(set(actions))
+    assert all(
+        len(_matching_profile_dispatchers(wizard_custom_id(draft(), action))) == 1
+        for action in actions
+    )
+    with pytest.raises(ValueError, match="Unsupported Bill profile component action"):
+        wizard_custom_id(draft(), "unknown")
+
+
 def test_realistic_persistent_ids_fit_discord_limit() -> None:
     realistic = replace(
         draft(),
@@ -322,5 +668,8 @@ def test_realistic_persistent_ids_fit_discord_limit() -> None:
         None,
     )
 
-    assert len(wizard_custom_id(realistic, "complete-links")) <= 100
+    assert all(
+        len(wizard_custom_id(realistic, action)) <= 100
+        for action in (*PROFILE_WIZARD_BUTTON_ACTIONS, *PROFILE_WIZARD_SELECT_ACTIONS)
+    )
     assert len(setup_custom_id(setup, "complete")) <= 100

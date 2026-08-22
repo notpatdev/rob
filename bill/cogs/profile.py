@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bill.components.profile import profile_wizard_view
+from bill.components.profile import member_presentation, profile_intro_view
 from bill.components.public_profile import public_profile_view
 from bill.worker_client import DraftScope, ProfileDraft, ServerProfileMode, WorkerAPIError
 
@@ -145,7 +145,7 @@ class ProfileCog(commands.Cog):
                     lookup.profile,
                     guild_id=interaction.guild_id or 0,
                     owner_view=target.id == interaction.user.id,
-                    display_name=target.display_name,
+                    presentation=member_presentation(target),
                 )
             )
             return
@@ -224,9 +224,12 @@ class ProfileCog(commands.Cog):
         try:
             dm = await interaction.user.create_dm()
             await dm.send(
-                "Welcome to Bill profile setup. Your progress is private and saved automatically."
+                "Welcome to Bill profile setup. This private wizard helps you choose what "
+                "other members can see, add public links, and optionally connect Throne. "
+                "Your progress saves automatically, and nothing is published until you "
+                "confirm it.",
+                view=profile_intro_view(draft),
             )
-            await dm.send(view=profile_wizard_view(draft))
         except discord.Forbidden:
             if interaction.response.is_done():
                 await interaction.followup.send(

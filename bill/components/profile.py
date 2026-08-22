@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import discord
@@ -62,6 +63,43 @@ ORIENTATION_LABELS = {
     Orientation.SWITCH_DOMME: "Switch (Dom/me lean)",
     Orientation.SWITCH_SUBMISSIVE: "Switch (submissive lean)",
 }
+PROFILE_WIZARD_BUTTON_ACTIONS = (
+    "start",
+    "publish",
+    "restart",
+    "identity",
+    "links",
+    "import",
+    "visibility",
+    "complete-links",
+    "skip-links",
+    "throne",
+    "skip-throne",
+    "rotate",
+)
+PROFILE_WIZARD_SELECT_ACTIONS = (
+    "orientation",
+    "identity-pronouns",
+    "identity-honourifics",
+    "identity-labels",
+    "link-select",
+    "creator-select",
+)
+_PROFILE_WIZARD_ACTIONS = frozenset(
+    (*PROFILE_WIZARD_BUTTON_ACTIONS, *PROFILE_WIZARD_SELECT_ACTIONS)
+)
+_PROFILE_WIZARD_ID_PATTERN = (
+    r"bill:p:(?P<draft>[A-Za-z0-9_-]+):(?P<owner>[a-z0-9]+):"
+    r"(?P<guild>[a-z0-9]+):(?P<revision>[a-z0-9]+):"
+)
+_PROFILE_WIZARD_BUTTON_TEMPLATE = re.compile(
+    _PROFILE_WIZARD_ID_PATTERN
+    + rf"(?P<action>{'|'.join(map(re.escape, PROFILE_WIZARD_BUTTON_ACTIONS))})$"
+)
+_PROFILE_WIZARD_SELECT_TEMPLATE = re.compile(
+    _PROFILE_WIZARD_ID_PATTERN
+    + rf"(?P<action>{'|'.join(map(re.escape, PROFILE_WIZARD_SELECT_ACTIONS))})$"
+)
 
 
 def safe_text(value: str, *, limit: int = 300) -> str:
@@ -69,8 +107,29 @@ def safe_text(value: str, *, limit: int = 300) -> str:
     return discord.utils.escape_mentions(discord.utils.escape_markdown(value))[:limit]
 
 
+@dataclass(frozen=True, slots=True)
+class MemberPresentation:
+    display_name: str
+    avatar_url: str | None = None
+
+
+def member_presentation(user: object) -> MemberPresentation:
+    """Read transient Discord presentation data without adding it to Worker state."""
+    display_name = (
+        getattr(user, "display_name", None)
+        or getattr(user, "global_name", None)
+        or getattr(user, "name", None)
+        or "Bill member"
+    )
+    avatar = getattr(user, "display_avatar", None)
+    avatar_url = getattr(avatar, "url", None)
+    return MemberPresentation(str(display_name), str(avatar_url) if avatar_url else None)
+
+
 def wizard_custom_id(draft: ProfileDraft, action: str) -> str:
     """Build a <=100-character persistent ID bound to all durable auth context."""
+    if action not in _PROFILE_WIZARD_ACTIONS:
+        raise ValueError(f"Unsupported Bill profile component action: {action}")
     custom_id = (
         f"bill:p:{encode_resource_id(draft.id)}:{encode_uint(draft.owner_user_id)}:"
         f"{encode_uint(draft.origin_guild_id)}:{encode_uint(draft.revision)}:{action}"
@@ -125,27 +184,101 @@ def _button(
     return discord.ui.Button(label=label, custom_id=wizard_custom_id(draft, action), style=style)
 
 
-def profile_wizard_view(draft: ProfileDraft) -> discord.ui.LayoutView:
+def profile_intro_view(draft: ProfileDraft) -> discord.ui.View:
+    """Build the normal, durable DM introduction shown before Components V2."""
+    view = discord.ui.View(timeout=None)
+    view.add_item(
+        discord.ui.Button(
+            label="Start",
+            custom_id=wizard_custom_id(draft, "start"),
+            style=discord.ButtonStyle.success,
+        )
+    )
+    return view
+
+
+def _member_section(
+    presentation: MemberPresentation,
+    *,
+    current_label: str,
+    scope_label: str,
+) -> discord.ui.Section | discord.ui.TextDisplay:
+    title = f"### {safe_text(presentation.display_name, limit=80)}"
+    metadata = (
+        f"-# Current step: {safe_text(current_label, limit=80)}",
+        f"-# Profile: {safe_text(scope_label, limit=80)} · progress saves automatically",
+    )
+    if presentation.avatar_url:
+        return discord.ui.Section(
+            discord.ui.TextDisplay(title),
+            *(discord.ui.TextDisplay(row) for row in metadata),
+            accessory=discord.ui.Thumbnail(
+                presentation.avatar_url,
+                description=f"{safe_text(presentation.display_name, limit=80)}'s avatar",
+            ),
+        )
+    return discord.ui.TextDisplay("\n".join((title, *metadata)))
+
+
+def _current_step_label(step: DraftStepKey) -> str:
+    return {
+        DraftStepKey.ORIENTATION: "Choose orientation",
+        DraftStepKey.IDENTITY: "Identity",
+        DraftStepKey.LINKS: "Links",
+        DraftStepKey.THRONE: "Throne",
+        DraftStepKey.REVIEW: "Review and publish",
+    }[step]
+
+
+def profile_wizard_view(
+    draft: ProfileDraft,
+    *,
+    presentation: MemberPresentation | None = None,
+) -> discord.ui.LayoutView:
     """Render the sole editable V2 wizard message from the latest Worker state."""
+    presentation = presentation or MemberPresentation("Bill member")
+    current = draft.next_step or draft.current_step or DraftStepKey.REVIEW
+    scope_label = (
+        "Global"
+        if draft.target_scope is DraftScope.GLOBAL
+        else (
+            "Server (linked)"
+            if draft.server_mode is ServerProfileMode.LINKED
+            else "Server (independent)"
+        )
+    )
     view = discord.ui.LayoutView(timeout=None)
     container = discord.ui.Container(accent_color=discord.Color.green())
-    container.add_item(discord.ui.TextDisplay("## Build your Bill profile"))
-    for step in draft.steps:
-        if step.status == "completed":
-            container.add_item(
-                discord.ui.TextDisplay(
-                    f"-# **{step.key.value.title()}**: {_summary(draft, step.key)} (Complete)"
-                )
-            )
-    current = draft.next_step or draft.current_step
+    container.add_item(discord.ui.TextDisplay("-# Bill Profile Setup"))
+    container.add_item(
+        _member_section(
+            presentation,
+            current_label=_current_step_label(current),
+            scope_label=scope_label,
+        )
+    )
+    container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+    completed = [
+        f"-# **{step.key.value.title()}**: {_summary(draft, step.key)} (Complete)"
+        for step in draft.steps
+        if step.status == "completed"
+    ]
+    if completed:
+        container.add_item(discord.ui.TextDisplay("\n".join(completed)))
+        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
     if current is DraftStepKey.ORIENTATION:
-        container.add_item(discord.ui.TextDisplay("### 1. Choose your orientation"))
+        container.add_item(
+            discord.ui.TextDisplay(
+                "Choose the orientation that best fits this profile. It controls which "
+                "identity, payment, and Throne options appear later."
+            )
+        )
         container.add_item(discord.ui.ActionRow(OrientationSelect(draft)))
     elif current is DraftStepKey.IDENTITY:
         container.add_item(
             discord.ui.TextDisplay(
-                "### Identity\nSet fixed selections, DM status, bio, aliases, and public stats "
-                "preference."
+                "Choose the labels you want to show, then add your DM status, optional bio, "
+                "aliases, and public send-stat preference."
             )
         )
         container.add_item(
@@ -188,7 +321,8 @@ def profile_wizard_view(draft: ProfileDraft) -> discord.ui.LayoutView:
         _, _, _, payment, _ = _caps(draft.governing_orientation)
         container.add_item(
             discord.ui.TextDisplay(
-                "### Links\nManage individual social/payment links or import a link page."
+                "Add social or payment links one at a time, or import a supported public "
+                "link page. Only enabled HTTPS links are shown publicly."
             )
         )
         links = [
@@ -211,8 +345,8 @@ def profile_wizard_view(draft: ProfileDraft) -> discord.ui.LayoutView:
     elif current is DraftStepKey.THRONE:
         container.add_item(
             discord.ui.TextDisplay(
-                "### Throne\nConnect an account, select a saved creator, rotate its webhook, "
-                "or skip."
+                "Connect a Throne creator, select one already saved to your account, rotate "
+                "its private webhook, or skip this step."
             )
         )
         controls = [
@@ -233,7 +367,8 @@ def profile_wizard_view(draft: ProfileDraft) -> discord.ui.LayoutView:
     else:
         container.add_item(
             discord.ui.TextDisplay(
-                "### Review\nYour saved draft is shown above. Edit a section or publish atomically."
+                "Review the completed sections above. You can edit any section now; "
+                "nothing becomes public until you choose **Publish**."
             )
         )
         edits = [
@@ -258,6 +393,13 @@ def profile_wizard_view(draft: ProfileDraft) -> discord.ui.LayoutView:
         )
     view.add_item(container)
     return view
+
+
+def _wizard_for(
+    interaction: discord.Interaction[discord.Client],
+    draft: ProfileDraft,
+) -> discord.ui.LayoutView:
+    return profile_wizard_view(draft, presentation=member_presentation(interaction.user))
 
 
 async def _load_draft(
@@ -366,10 +508,7 @@ class ThroneCreatorSelect(discord.ui.Select):
 
 class ProfileWizardDynamic(
     discord.ui.DynamicItem[discord.ui.Button],
-    template=re.compile(
-        r"bill:p:(?P<draft>[A-Za-z0-9_-]+):(?P<owner>[a-z0-9]+):"
-        r"(?P<guild>[a-z0-9]+):(?P<revision>[a-z0-9]+):(?P<action>[a-z0-9:_-]+)$"
-    ),
+    template=_PROFILE_WIZARD_BUTTON_TEMPLATE,
 ):
     """Persistent action dispatcher; only Worker state decides whether it is valid."""
 
@@ -416,6 +555,17 @@ class ProfileWizardDynamic(
         if draft is None:
             return
         message = interaction.message
+        if self.action == "start":
+            if message is None:
+                await interaction.response.send_message(
+                    "Please reopen your profile setup with `/profile`.", ephemeral=True
+                )
+                return
+            await interaction.response.edit_message(
+                content=None,
+                view=_wizard_for(interaction, draft),
+            )
+            return
         if self.action == "publish":
             try:
                 await bot.require_worker().publish_draft(
@@ -487,7 +637,7 @@ class ProfileWizardDynamic(
                     f"Bill could not save links: {exc}", ephemeral=True
                 )
                 return
-            await interaction.response.edit_message(view=profile_wizard_view(updated))
+            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
             return
         if self.action == "throne":
             await interaction.response.send_modal(ThroneModal(draft, message))
@@ -509,7 +659,7 @@ class ProfileWizardDynamic(
                     f"Bill could not skip Throne: {exc}", ephemeral=True
                 )
                 return
-            await interaction.response.edit_message(view=profile_wizard_view(updated))
+            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
             return
         if self.action == "rotate":
             try:
@@ -533,7 +683,7 @@ class ProfileWizardDynamic(
                     f"Bill could not rotate that webhook: {exc}", ephemeral=True
                 )
                 return
-            await interaction.response.edit_message(view=profile_wizard_view(updated))
+            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
             if rotated.webhook_url:
                 await interaction.followup.send(
                     "Your new private Throne webhook URL (save it now):\n"
@@ -548,12 +698,7 @@ class ProfileWizardDynamic(
 
 class _ProfileSelectDynamic(
     discord.ui.DynamicItem[discord.ui.Select],
-    template=re.compile(
-        r"bill:p:(?P<draft>[A-Za-z0-9_-]+):(?P<owner>[a-z0-9]+):"
-        r"(?P<guild>[a-z0-9]+):(?P<revision>[a-z0-9]+):"
-        r"(?P<action>orientation|identity-pronouns|identity-honourifics|"
-        r"identity-labels|link-select|creator-select)$"
-    ),
+    template=_PROFILE_WIZARD_SELECT_TEMPLATE,
 ):
     def __init__(
         self,
@@ -611,7 +756,7 @@ class _ProfileSelectDynamic(
                     f"Bill could not save that orientation: {exc}", ephemeral=True
                 )
                 return
-            await interaction.response.edit_message(view=profile_wizard_view(updated))
+            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
             return
         if self.action.startswith("identity-"):
             field = self.action.removeprefix("identity-")
@@ -629,7 +774,7 @@ class _ProfileSelectDynamic(
                     ephemeral=True,
                 )
                 return
-            await interaction.response.edit_message(view=profile_wizard_view(updated))
+            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
             return
         message = interaction.message
         if message is None:
@@ -673,7 +818,7 @@ class _ProfileSelectDynamic(
                 f"Bill could not connect that creator: {exc}", ephemeral=True
             )
             return
-        await interaction.response.edit_message(view=profile_wizard_view(updated))
+        await interaction.response.edit_message(view=_wizard_for(interaction, updated))
         if attached.webhook_url:
             await interaction.followup.send(
                 "Your private Throne webhook URL (save it now):\n"
@@ -891,7 +1036,7 @@ class InheritedLinkVisibilityView(discord.ui.View):
                 view=None,
             )
             return
-        await self.message.edit(view=profile_wizard_view(updated))
+        await self.message.edit(view=_wizard_for(interaction, updated))
         await interaction.response.edit_message(
             content=f"Hidden {len(hidden_ids)} inherited link(s) in this server.",
             view=None,
@@ -963,7 +1108,7 @@ class IdentityModal(discord.ui.Modal, title="Profile identity"):
                 f"Bill could not save identity: {exc}", ephemeral=True
             )
             return
-        await self.message.edit(view=profile_wizard_view(updated))
+        await self.message.edit(view=_wizard_for(interaction, updated))
         await interaction.response.send_message("Identity saved.", ephemeral=True)
 
 
@@ -1018,7 +1163,7 @@ class LinkModal(discord.ui.Modal, title="Add a profile link"):
                 f"Bill could not save that link: {exc}", ephemeral=True
             )
             return
-        await self.message.edit(view=profile_wizard_view(updated))
+        await self.message.edit(view=_wizard_for(interaction, updated))
         await interaction.response.send_message(
             "Link saved. Choose **Done** when your links are ready.", ephemeral=True
         )
@@ -1047,7 +1192,7 @@ class LinkImportModal(discord.ui.Modal, title="Import a link page"):
                 f"Bill could not import that page: {exc}", ephemeral=True
             )
             return
-        await self.message.edit(view=profile_wizard_view(result.draft))
+        await self.message.edit(view=_wizard_for(interaction, result.draft))
         labels = (
             ", ".join(
                 safe_text(candidate.public_label, limit=40)
@@ -1098,7 +1243,7 @@ class ThroneModal(discord.ui.Modal, title="Connect Throne"):
                 f"Bill could not connect that Throne account: {exc}", ephemeral=True
             )
             return
-        await self.message.edit(view=profile_wizard_view(updated))
+        await self.message.edit(view=_wizard_for(interaction, updated))
         text = "Throne connected."
         if attached.webhook_url:
             text += (
@@ -1144,7 +1289,7 @@ class ImportConfirmView(discord.ui.View):
         await interaction.response.edit_message(
             content=f"Added {result.added_link_count} link(s).", view=None
         )
-        await self.message.edit(view=profile_wizard_view(result.draft))
+        await self.message.edit(view=_wizard_for(interaction, result.draft))
 
     @discord.ui.button(label="Not Quite", style=discord.ButtonStyle.secondary)
     async def manual(
@@ -1183,7 +1328,7 @@ class LinkManagerView(discord.ui.View):
                 content=f"Bill could not remove that link: {exc}", view=None
             )
             return
-        await self.message.edit(view=profile_wizard_view(updated))
+        await self.message.edit(view=_wizard_for(interaction, updated))
         await interaction.response.edit_message(content="Link removed.", view=None)
 
     @discord.ui.button(label="Prefer payment", style=discord.ButtonStyle.secondary)
@@ -1216,7 +1361,7 @@ class LinkManagerView(discord.ui.View):
                 content=f"Bill could not prefer that link: {exc}", view=None
             )
             return
-        await self.message.edit(view=profile_wizard_view(updated))
+        await self.message.edit(view=_wizard_for(interaction, updated))
         await interaction.response.edit_message(
             content="Preferred payment link updated.", view=None
         )
@@ -1248,7 +1393,7 @@ class RestartConfirmView(discord.ui.View):
         )
         try:
             await interaction.user.create_dm()
-            await interaction.user.dm_channel.send(view=profile_wizard_view(draft))  # type: ignore[union-attr]
+            await interaction.user.dm_channel.send(view=_wizard_for(interaction, draft))  # type: ignore[union-attr]
         except discord.Forbidden:
             return
 

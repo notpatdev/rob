@@ -1,0 +1,23 @@
+{
+  "name": "bill-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bill's Cloudflare Worker: Throne webhook ingestion, guild/registration API, and leased Discord notification delivery.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test",
+    "deploy": "wrangler deploy",
+    "migrate:local": "wrangler d1 migrations apply bill --local",
+    "migrate:remote": "wrangler d1 migrations apply bill --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.19",
+    "@cloudflare/workers-types": "^4.20250110.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.7",
+    "wrangler": "^3.109.2"
+  }
+}

@@ -1,68 +1,27 @@
-# Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
 .pytest_cache/
-.mypy_cache/
 .ruff_cache/
-
-# Virtual environments
 .venv/
-venv/
-env/
+*.egg-info/
+dist/
+build/
 
-# Environment files / secrets
 .env
 .env.*
 !.env.example
+!worker/.dev.vars.example
 
-# Keys / credentials (never commit private key material or tunnel creds)
-*.pem
-*.key
-*.p12
-*.pfx
-cert.pem
-id_rsa*
-id_ed25519*
-*_ed25519
-*.tunnel.json
-*tunnel*.json
-cloudflared/
+worker/node_modules/
+worker/.wrangler/
+worker/coverage/
 
-# Local Discord/server config
-bot/channels.py
-
-# Databases / local data
-data/
-*.sqlite
-*.sqlite3
-*.db
-*.db-wal
-*.db-shm
-
-# Logs
 *.log
-logs/
-
-# Build/package junk (anchored to repo root so it does not shadow db/build/)
-/build/
-/dist/
-*.egg-info/
-
-# Keep Rob DB build SQL scripts tracked.
-!db/build/
-!db/build/*.sql
-!db/build/README.md
-
-# OS/editor files
 .DS_Store
 .vscode/
 .idea/
 
-# Legacy migration files
-*.tar.gz
-rob-sqlite-schema.sql
-rob_the_bot.sqlite3*
-
-legacy-import/
+*.pem
+*.key
+*.p12
+*.pfx

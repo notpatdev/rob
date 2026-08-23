@@ -301,8 +301,8 @@ describe("0004 migration additive safety", () => {
         before,
       )
     ).data.draft;
-    // current_step = links, next pending step = throne, so the derived resume screen is Throne.
-    expect(beforeDraft.wizard_stage).toBe("throne");
+    // Pre-0004 rows have no deliberate DM-status marker, so identity must be revisited.
+    expect(beforeDraft.wizard_stage).toBe("pronouns");
     expect(beforeDraft.wizard_substep).toBeNull();
 
     const moved = await callWorker(

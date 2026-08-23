@@ -679,11 +679,7 @@ class WorkerClient:
                 },
             ),
         )
-        return ThroneDraftResult(
-            await self.get_draft(draft_id, owner_user_id=owner_user_id),
-            _optional_string(data.get("webhook_url")),
-            _string(data.get("webhook_state"), "webhook_state"),
-        )
+        return self._parse_throne_result(data)
 
     async def resolve_throne(
         self,
@@ -705,7 +701,7 @@ class WorkerClient:
         handle = _string(data.get("handle"), "Throne handle")
         already_verified = _bool(data.get("already_verified"), "already_verified")
         return ThroneResolveResult(
-            await self.get_draft(draft_id, owner_user_id=owner_user_id),
+            self._parse_draft(data.get("draft")),
             handle,
             already_verified,
         )
@@ -718,11 +714,7 @@ class WorkerClient:
             f"/v1/profile-drafts/{draft_id}/throne/rotate",
             json=self._mutation(owner_user_id, expected_revision),
         )
-        return ThroneDraftResult(
-            await self.get_draft(draft_id, owner_user_id=owner_user_id),
-            _optional_string(data.get("webhook_url")),
-            _string(data.get("webhook_state"), "webhook_state"),
-        )
+        return self._parse_throne_result(data)
 
     async def get_throne_status(
         self,

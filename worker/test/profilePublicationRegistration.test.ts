@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { DraftError } from "../src/profile/draftService";
 import { publishDraft } from "../src/profile/publishService";
 import { seedCreator, seedGuild, TEST_HOME_GUILD_ID } from "./helpers";
-import { seedDocument } from "./profileHelpers";
+import { seedDocument, seedSelection } from "./profileHelpers";
 
 async function seedCompletedDraft(options: {
   owner: string;
@@ -19,6 +19,7 @@ async function seedCompletedDraft(options: {
     dmStatus: "open",
     throneCreatorId: options.creatorId,
   });
+  await seedSelection(options.documentId, "pronoun", "She/Her");
   const now = new Date().toISOString();
   await env.DB.prepare("UPDATE throne_creators SET webhook_verified_at = ? WHERE id = ?")
     .bind(now, options.creatorId)

@@ -587,7 +587,12 @@ export function parseLinkedIdentityStep(body: unknown, globalOrientation: Orient
   const caps = ORIENTATION_CAPABILITIES[globalOrientation];
   const overriddenFields = parseOverridesList(record.overrides, caps);
 
-  const pronouns = overriddenFields.has("pronouns") ? parseFixedMultiSelect(record.pronouns, PRONOUNS, "pronouns") : [];
+  const pronouns = overriddenFields.has("pronouns")
+    ? parseFixedMultiSelect(record.pronouns, PRONOUNS, "pronouns")
+    : [];
+  if (overriddenFields.has("pronouns") && pronouns.length === 0) {
+    fail("pronouns_required", "an explicit pronoun override must contain at least one pronoun");
+  }
   const honourifics = overriddenFields.has("honourifics")
     ? parseFixedMultiSelect(record.honourifics, HONOURIFICS, "honourifics")
     : [];

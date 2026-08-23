@@ -32,7 +32,7 @@ async function readJsonBody(request: Request): Promise<Record<string, unknown> |
   return body as Record<string, unknown>;
 }
 
-function serializeDraftContract(draft: DraftContract) {
+export function serializeDraftContract(draft: DraftContract) {
   return {
     id: draft.id,
     owner_user_id: draft.ownerUserId,

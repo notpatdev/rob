@@ -111,6 +111,8 @@ PROFILE_WIZARD_BUTTON_ACTIONS = (
     "edit-links",
     "edit-throne",
     "edit-details",
+    "identity",
+    "links",
 )
 PROFILE_WIZARD_SELECT_ACTIONS = (
     "orientation",
@@ -122,6 +124,10 @@ PROFILE_WIZARD_SELECT_ACTIONS = (
     "stats",
     "link-select",
     "creator-select",
+    "identity-pronouns",
+    "identity-honourifics",
+    "identity-labels",
+    "identity-dm-status",
 )
 _PROFILE_WIZARD_ACTIONS = frozenset(
     (*PROFILE_WIZARD_BUTTON_ACTIONS, *PROFILE_WIZARD_SELECT_ACTIONS)
@@ -253,6 +259,22 @@ def _stage(draft: ProfileDraft) -> WizardStage:
     stage = draft.wizard_stage or _legacy_stage(draft)
     stages = wizard_stages(draft.governing_orientation, linked=_is_linked(draft))
     return stage if stage in stages else stages[-1]
+
+
+def _throne_verification_state(draft: ProfileDraft) -> str | None:
+    substep = draft.wizard_substep
+    if substep is None or substep == "review":
+        return None
+    return substep.removeprefix("review:")
+
+
+def _returns_to_review(draft: ProfileDraft) -> bool:
+    substep = draft.wizard_substep
+    return substep == "review" or bool(substep and substep.startswith("review:"))
+
+
+def _throne_substep(draft: ProfileDraft, state: str) -> str:
+    return f"review:{state}" if _returns_to_review(draft) else state
 
 
 def _stage_title(stage: WizardStage) -> str:
@@ -572,7 +594,7 @@ def profile_wizard_view(
             container.add_item(discord.ui.ActionRow(LinkSelect(draft, payment=payment)))
     elif current is WizardStage.THRONE:
         connected = draft.document.throne_creator_id is not None
-        verified = draft.wizard_substep == "verified"
+        verified = _throne_verification_state(draft) == "verified"
         if verified:
             copy = (
                 "Throne has confirmed the private webhook connection. You can continue or rotate "
@@ -749,7 +771,7 @@ def _adjacent_stage(
 ) -> WizardStage:
     stages = wizard_stages(draft.governing_orientation, linked=_is_linked(draft))
     current = _stage(draft)
-    if forward and draft.wizard_substep == "review":
+    if forward and _returns_to_review(draft):
         return WizardStage.REVIEW
     index = stages.index(current)
     offset = 1 if forward else -1
@@ -766,6 +788,16 @@ async def _send_ephemeral(
         await interaction.followup.send(content, view=view, ephemeral=True)
     else:
         await interaction.response.send_message(content, view=view, ephemeral=True)
+
+
+async def _send_throne_webhook_url(
+    interaction: discord.Interaction[discord.Client],
+    webhook_url: str,
+) -> None:
+    await interaction.followup.send(
+        _throne_webhook_instructions(webhook_url),
+        ephemeral=True,
+    )
 
 
 async def _move_wizard(
@@ -801,7 +833,7 @@ def _validate_continue(draft: ProfileDraft) -> None:
         or (_is_linked(draft) and "dm_status" not in draft.document.overridden_fields)
     ):
         raise ValueError("choose a DM status")
-    if current is WizardStage.THRONE and draft.wizard_substep != "verified":
+    if current is WizardStage.THRONE and _throne_verification_state(draft) != "verified":
         raise ValueError("verify the Throne connection or choose Skip for now")
 
 
@@ -812,6 +844,8 @@ async def _load_draft(
     owner: str,
     origin: str,
     revision: int,
+    *,
+    allow_stale_revision: bool = False,
 ) -> ProfileDraft | None:
     if str(interaction.user.id) != owner:
         await _send_ephemeral(interaction, "That profile control belongs to someone else.")
@@ -835,7 +869,10 @@ async def _load_draft(
             interaction, "That profile control belongs to a different profile session."
         )
         return None
-    if draft.revision != revision or draft.status.value != "active":
+    if (
+        (draft.revision != revision and not allow_stale_revision)
+        or draft.status.value != "active"
+    ):
         await _send_ephemeral(
             interaction, "That profile control is stale. Please use the latest wizard message."
         )
@@ -1068,6 +1105,7 @@ class ProfileWizardDynamic(
 
     async def callback(self, interaction: discord.Interaction[discord.Client]) -> None:
         bot = cast("BillBot", interaction.client)
+        legacy_action = self.action in {"identity", "links"}
         modal_actions = {
             "bio",
             "aliases",
@@ -1079,7 +1117,13 @@ class ProfileWizardDynamic(
         }
         await interaction.response.defer()
         draft = await _load_draft(
-            bot, interaction, self.draft_id, self.owner, self.guild, self.revision
+            bot,
+            interaction,
+            self.draft_id,
+            self.owner,
+            self.guild,
+            self.revision,
+            allow_stale_revision=legacy_action,
         )
         if draft is None:
             return
@@ -1094,6 +1138,23 @@ class ProfileWizardDynamic(
                 content=None,
                 view=_wizard_for(interaction, draft),
             )
+            return
+        if legacy_action:
+            if message is None:
+                await _send_ephemeral(interaction, "Please reopen your wizard with `/profile`.")
+                return
+            target = (
+                WizardStage.PRONOUNS if self.action == "identity" else WizardStage.LINKS
+            )
+            updated = await _move_wizard(
+                bot,
+                interaction,
+                draft,
+                target,
+                substep="legacy",
+            )
+            if updated is not None:
+                await interaction.edit_original_response(view=_wizard_for(interaction, updated))
             return
         if self.action == "publish":
             try:
@@ -1296,17 +1357,25 @@ class ProfileWizardDynamic(
                     expected_revision=draft.revision,
                     confirm_pending=True,
                 )
-                status = await bot.require_worker().get_throne_status(
-                    attached.draft.id,
-                    owner_user_id=interaction.user.id,
-                    expected_revision=attached.draft.revision,
-                )
+                if attached.webhook_url is not None:
+                    await _send_throne_webhook_url(interaction, attached.webhook_url)
+                    status = None
+                else:
+                    status = await bot.require_worker().get_throne_status(
+                        attached.draft.id,
+                        owner_user_id=interaction.user.id,
+                        expected_revision=attached.draft.revision,
+                    )
                 updated = await bot.require_worker().set_draft_wizard_stage(
                     attached.draft.id,
                     owner_user_id=interaction.user.id,
                     expected_revision=attached.draft.revision,
                     stage=WizardStage.THRONE,
-                    substep="verified" if status.verified else "awaiting_verification",
+                    substep=(
+                        _throne_substep(draft, "verified")
+                        if status is not None and status.verified
+                        else _throne_substep(draft, "awaiting_verification")
+                    ),
                 )
             except WorkerAPIError as exc:
                 await _send_ephemeral(
@@ -1315,12 +1384,7 @@ class ProfileWizardDynamic(
                 )
                 return
             await interaction.edit_original_response(view=_wizard_for(interaction, updated))
-            if attached.webhook_url:
-                await interaction.followup.send(
-                    _throne_webhook_instructions(attached.webhook_url),
-                    ephemeral=True,
-                )
-            elif status.verified:
+            if status is not None and status.verified:
                 await interaction.followup.send(
                     f"**@{safe_text(status.handle or draft.throne_pending.handle, limit=80)}** "
                     "is already connected and verified.",
@@ -1372,7 +1436,7 @@ class ProfileWizardDynamic(
                     owner_user_id=interaction.user.id,
                     expected_revision=draft.revision,
                     stage=WizardStage.THRONE,
-                    substep="verified",
+                    substep=_throne_substep(draft, "verified"),
                 )
             except WorkerAPIError as exc:
                 await _send_ephemeral(
@@ -1387,12 +1451,15 @@ class ProfileWizardDynamic(
                 rotated = await bot.require_worker().rotate_throne(
                     draft.id, owner_user_id=interaction.user.id, expected_revision=draft.revision
                 )
+                if rotated.webhook_url is None:
+                    raise WorkerAPIError("Worker did not return the rotated webhook URL")
+                await _send_throne_webhook_url(interaction, rotated.webhook_url)
                 updated = await bot.require_worker().set_draft_wizard_stage(
                     rotated.draft.id,
                     owner_user_id=interaction.user.id,
                     expected_revision=rotated.draft.revision,
                     stage=WizardStage.THRONE,
-                    substep="awaiting_verification",
+                    substep=_throne_substep(draft, "awaiting_verification"),
                 )
             except WorkerAPIError as exc:
                 await _send_ephemeral(
@@ -1400,11 +1467,6 @@ class ProfileWizardDynamic(
                 )
                 return
             await interaction.edit_original_response(view=_wizard_for(interaction, updated))
-            if rotated.webhook_url:
-                await interaction.followup.send(
-                    _throne_webhook_instructions(rotated.webhook_url),
-                    ephemeral=True,
-                )
             return
         await _send_ephemeral(
             interaction, "That action is no longer available. Use the latest wizard."
@@ -1452,11 +1514,44 @@ class _ProfileSelectDynamic(
 
     async def callback(self, interaction: discord.Interaction[discord.Client]) -> None:
         bot = cast("BillBot", interaction.client)
+        legacy_stages = {
+            "identity-pronouns": WizardStage.PRONOUNS,
+            "identity-honourifics": WizardStage.HONOURIFICS,
+            "identity-labels": WizardStage.SUBMISSIVE_LABELS,
+            "identity-dm-status": WizardStage.DM_STATUS,
+        }
+        legacy_action = self.action in legacy_stages
         await interaction.response.defer()
         draft = await _load_draft(
-            bot, interaction, self.draft_id, self.owner, self.guild, self.revision
+            bot,
+            interaction,
+            self.draft_id,
+            self.owner,
+            self.guild,
+            self.revision,
+            allow_stale_revision=legacy_action,
         )
         if draft is None:
+            return
+        if legacy_action:
+            if interaction.message is None:
+                await _send_ephemeral(interaction, "Please reopen your wizard with `/profile`.")
+                return
+            available = wizard_stages(
+                draft.governing_orientation,
+                linked=_is_linked(draft),
+            )
+            requested = legacy_stages[self.action]
+            target = requested if requested in available else _stage(draft)
+            updated = await _move_wizard(
+                bot,
+                interaction,
+                draft,
+                target,
+                substep="legacy",
+            )
+            if updated is not None:
+                await interaction.edit_original_response(view=_wizard_for(interaction, updated))
             return
         if not self.item.values and self.action not in {"honourifics", "labels"}:
             await _send_ephemeral(interaction, "Choose an option before continuing.")
@@ -1536,17 +1631,25 @@ class _ProfileSelectDynamic(
                 expected_revision=draft.revision,
                 existing_creator_id=creator_id,
             )
-            status = await bot.require_worker().get_throne_status(
-                attached.draft.id,
-                owner_user_id=interaction.user.id,
-                expected_revision=attached.draft.revision,
-            )
+            if attached.webhook_url is not None:
+                await _send_throne_webhook_url(interaction, attached.webhook_url)
+                status = None
+            else:
+                status = await bot.require_worker().get_throne_status(
+                    attached.draft.id,
+                    owner_user_id=interaction.user.id,
+                    expected_revision=attached.draft.revision,
+                )
             updated = await bot.require_worker().set_draft_wizard_stage(
                 attached.draft.id,
                 owner_user_id=interaction.user.id,
                 expected_revision=attached.draft.revision,
                 stage=WizardStage.THRONE,
-                substep="verified" if status.verified else "awaiting_verification",
+                substep=(
+                    _throne_substep(draft, "verified")
+                    if status is not None and status.verified
+                    else _throne_substep(draft, "awaiting_verification")
+                ),
             )
         except WorkerAPIError as exc:
             await _send_ephemeral(
@@ -1554,12 +1657,7 @@ class _ProfileSelectDynamic(
             )
             return
         await interaction.edit_original_response(view=_wizard_for(interaction, updated))
-        if attached.webhook_url:
-            await interaction.followup.send(
-                _throne_webhook_instructions(attached.webhook_url),
-                ephemeral=True,
-            )
-        elif status.verified:
+        if status is not None and status.verified:
             await interaction.followup.send(
                 f"**@{safe_text(status.handle or 'Throne creator', limit=80)}** is already "
                 "connected and verified. You can continue.",

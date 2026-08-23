@@ -88,6 +88,12 @@ describe("parseLinkedIdentityStep", () => {
   it("rejects overriding a field the governing orientation does not support", () => {
     expect(() => parseLinkedIdentityStep({ overrides: ["submissive_labels"] }, "domme")).toThrow(ValidationError);
   });
+
+  it("rejects an explicit empty pronoun override", () => {
+    expect(() =>
+      parseLinkedIdentityStep({ overrides: ["pronouns"], pronouns: [] }, "domme"),
+    ).toThrow(expect.objectContaining({ code: "pronouns_required" }));
+  });
 });
 
 describe("parseLinkStep", () => {

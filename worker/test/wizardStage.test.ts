@@ -69,6 +69,7 @@ function identityBody(owner: string, revision: number, extra: Record<string, unk
     honourifics: [],
     submissive_labels: [],
     dm_status: "open",
+    dm_status_selected: true,
     bio: null,
     public_send_stats: false,
     aliases: [],

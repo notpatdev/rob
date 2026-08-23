@@ -2,7 +2,8 @@ import type { RouteContext } from "../router.js";
 import { Errors, fail, ok } from "../util/response.js";
 import { isSnowflake } from "../util/snowflake.js";
 import { HomeGuildNotConfiguredError } from "../env.js";
-import { DraftError, type DraftContract } from "../profile/draftService.js";
+import { DraftError } from "../profile/draftService.js";
+import { serializeDraftContract } from "./profileDrafts.js";
 import {
   attachThroneToDraft,
   getDraftThroneStatus,
@@ -11,36 +12,6 @@ import {
   type ThroneDraftResult,
   type ThroneResolveResult,
 } from "../profile/throneDraftService.js";
-
-function serializeDraftContract(draft: DraftContract) {
-  return {
-    id: draft.id,
-    revision: draft.revision,
-    current_step: draft.currentStep,
-    next_step: draft.nextStep,
-    steps: draft.steps.map((step) => ({ key: step.key, status: step.status, completed_at: step.completedAt })),
-    dm_status_selected: draft.dmStatusSelected,
-    document: {
-      throne_creator_id: draft.document.throneCreatorId,
-      preferred_payment_link_id: draft.document.preferredPaymentLinkId,
-    },
-    throne_prefill:
-      draft.thronePrefill === null
-        ? null
-        : {
-            owned_creators: draft.thronePrefill.ownedCreators.map((creator) => ({ id: creator.id, handle: creator.handle })),
-            existing_registration_creator_id: draft.thronePrefill.existingRegistrationCreatorId,
-          },
-    throne_pending:
-      draft.thronePending === null
-        ? null
-        : { handle: draft.thronePending.handle, expires_at: draft.thronePending.expiresAt },
-    resolved_profile_color: draft.resolvedProfileColor,
-    wizard_stage: draft.wizardStage,
-    wizard_substep: draft.wizardSubstep,
-    updated_at: draft.updatedAt,
-  };
-}
 
 function serializeThroneResult(result: ThroneDraftResult) {
   return {

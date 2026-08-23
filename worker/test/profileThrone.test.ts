@@ -64,6 +64,11 @@ describe("profile Throne mutations", () => {
     const owner = "930000000000000010";
     const draft = await startDommeDraft(owner);
     mockResolve("public-confirmed-creator", "confirmedqueen");
+    await env.DB.prepare(
+      "UPDATE profile_drafts SET wizard_stage = 'throne', wizard_substep = 'review' WHERE id = ?",
+    )
+      .bind(draft.id)
+      .run();
 
     const resolvedResponse = await callWorker(
       jsonRequest(
@@ -80,7 +85,11 @@ describe("profile Throne mutations", () => {
     expect(resolvedResponse.status).toBe(200);
     const resolved = await readJson<{
       data: {
-        draft: { revision: number; throne_pending: { handle: string } };
+        draft: {
+          revision: number;
+          throne_pending: { handle: string };
+          wizard_substep: string;
+        };
         handle: string;
         already_verified: boolean;
         confirmation_token: string;
@@ -88,6 +97,7 @@ describe("profile Throne mutations", () => {
     }>(resolvedResponse);
     expect(resolved.data.handle).toBe("confirmedqueen");
     expect(resolved.data.draft.throne_pending.handle).toBe("confirmedqueen");
+    expect(resolved.data.draft.wizard_substep).toBe("review:confirm");
     expect(resolved.data.already_verified).toBe(false);
     expect(resolved.data.confirmation_token).toBeTruthy();
     expect(
@@ -122,9 +132,21 @@ describe("profile Throne mutations", () => {
     );
     expect(confirmResponse.status).toBe(200);
     const confirmed = await readJson<{
-      data: { webhook_url: string; draft: { throne_pending: null } };
+      data: {
+        webhook_url: string;
+        draft: {
+          owner_user_id: string;
+          status: string;
+          document: { selections: { pronouns: string[] }; throne_creator_id: string };
+          throne_pending: null;
+        };
+      };
     }>(confirmResponse);
     expect(confirmed.data.webhook_url).toMatch(/^https:\/\/usebill\.dev\/t\/[^/]+\/[\w-]+$/);
+    expect(confirmed.data.draft.owner_user_id).toBe(owner);
+    expect(confirmed.data.draft.status).toBe("active");
+    expect(confirmed.data.draft.document.selections.pronouns).toEqual([]);
+    expect(confirmed.data.draft.document.throne_creator_id).toBeTruthy();
     expect(confirmed.data.draft.throne_pending).toBeNull();
     expect(
       await env.DB.prepare("SELECT owner_discord_user_id FROM throne_creators WHERE public_creator_id = ?")
@@ -191,6 +213,7 @@ describe("profile Throne mutations", () => {
       honourifics: [],
       submissive_labels: [],
       dm_status: "open",
+      dm_status_selected: true,
       bio: null,
       public_send_stats: false,
       aliases: [],

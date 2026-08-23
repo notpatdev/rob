@@ -79,6 +79,7 @@ export async function publishDraft(env: Env, input: PublishDraftInput): Promise<
   const linked = draft.target_scope === "server" && draft.server_mode === "linked";
   let governingOrientation = snapshot.orientation;
   let governingCreatorId = snapshot.throneCreatorId;
+  let effectivePronouns = snapshot.selections.pronouns;
   if (linked) {
     const globalRoot = await env.DB.prepare("SELECT current_document_id FROM global_profiles WHERE owner_user_id = ?")
       .bind(draft.owner_user_id)
@@ -89,6 +90,9 @@ export async function publishDraft(env: Env, input: PublishDraftInput): Promise<
     const globalSnapshot = await readDocumentSnapshot(env, globalRoot.current_document_id);
     governingOrientation = globalSnapshot?.orientation ?? null;
     governingCreatorId = globalSnapshot?.throneCreatorId ?? null;
+    if (!snapshot.overriddenFields.includes("pronouns")) {
+      effectivePronouns = globalSnapshot?.selections.pronouns ?? [];
+    }
   }
   if (governingOrientation === null) {
     badRequest("orientation_required", "orientation must be chosen before publishing");
@@ -130,6 +134,9 @@ export async function publishDraft(env: Env, input: PublishDraftInput): Promise<
   }
   if (!linked && snapshot.dmStatus === null) {
     badRequest("dm_status_required", "dm_status must be chosen before publishing");
+  }
+  if (effectivePronouns.length === 0) {
+    badRequest("pronouns_required", "at least one pronoun is required before publishing");
   }
 
   const caps = ORIENTATION_CAPABILITIES[governingOrientation];

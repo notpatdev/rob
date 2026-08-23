@@ -11,7 +11,7 @@ import {
 import { readDocumentSnapshot } from "../src/profile/documentStore";
 import { resolveProfile } from "../src/profile/resolver";
 import { authHeaders, callWorker, jsonRequest, readJson, TEST_HOME_GUILD_ID } from "./helpers";
-import { seedDocument, seedGlobalProfile, seedOverride, seedServerProfile } from "./profileHelpers";
+import { seedDocument, seedGlobalProfile, seedOverride, seedSelection, seedServerProfile } from "./profileHelpers";
 
 const OTHER_GUILD = "710000000000000001";
 const ROSE = 0xe0568a;
@@ -77,6 +77,7 @@ function identityBody(owner: string, revision: number, extra: Record<string, unk
     honourifics: [],
     submissive_labels: [],
     dm_status: "open",
+    dm_status_selected: true,
     bio: null,
     public_send_stats: false,
     aliases: [],
@@ -458,6 +459,7 @@ describe("profile_color on a linked server draft", () => {
       dmStatus: "open",
       profileColor: ROSE,
     });
+    await seedSelection("colour-linked-global-2", "pronoun", "She/Her");
     await seedGlobalProfile(owner, "colour-linked-global-2");
 
     const draft = await startDraft({
@@ -472,6 +474,7 @@ describe("profile_color on a linked server draft", () => {
       expected_revision: draft.revision,
       overrides: ["profile_color"],
       profile_color: TEAL,
+      dm_status_selected: true,
     });
     const links = await putStep(draft.id, "links", {
       owner_user_id: owner,

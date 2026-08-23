@@ -41,6 +41,21 @@ describe("resolveProfile", () => {
     expect(result.profile?.selections.honourifics).toEqual(["Goddess"]);
   });
 
+  it("keeps legacy published profiles with no pronouns readable", async () => {
+    await seedDocument({
+      id: "doc-global-legacy-empty-pronouns",
+      ownerUserId: "100",
+      orientation: "domme",
+      dmStatus: "open",
+    });
+    await seedGlobalProfile("100", "doc-global-legacy-empty-pronouns");
+
+    const result = await resolveProfile(env, TEST_HOME_GUILD_ID, "100");
+
+    expect(result.profile).not.toBeNull();
+    expect(result.profile?.selections.pronouns).toEqual([]);
+  });
+
   it("reports global_available outside the home guild even without a server profile", async () => {
     await seedDocument({ id: "doc-global-2", ownerUserId: "11", orientation: "submissive", dmStatus: "open" });
     await seedGlobalProfile("11", "doc-global-2");

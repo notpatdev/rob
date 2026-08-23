@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
 import { authHeaders, callWorker, jsonRequest, readJson, TEST_HOME_GUILD_ID } from "./helpers";
+import { seedDocument, seedGlobalProfile, seedSelection } from "./profileHelpers";
 
 const OWNER = "500000000000000001";
 const OTHER_GUILD = "500000000000000002";
@@ -66,6 +67,98 @@ async function lookup(guildId: string, userId: string) {
 }
 
 describe("profile draft lifecycle (global scope, domme orientation)", () => {
+  it.each([
+    {
+      owner: "500000000000000191",
+      target_scope: "global",
+      origin_guild_id: TEST_HOME_GUILD_ID,
+    },
+    {
+      owner: "500000000000000192",
+      target_scope: "server",
+      origin_guild_id: OTHER_GUILD,
+      guild_id: OTHER_GUILD,
+      server_mode: "independent",
+    },
+  ])("rejects completing a $target_scope identity without pronouns", async (scope) => {
+    const started = await startDraft({
+      owner_user_id: scope.owner,
+      origin_guild_id: scope.origin_guild_id,
+      target_scope: scope.target_scope,
+      ...(scope.guild_id === undefined
+        ? {}
+        : { guild_id: scope.guild_id, server_mode: scope.server_mode }),
+    });
+    await putStep(started.draft.id, "orientation", {
+      owner_user_id: scope.owner,
+      expected_revision: 0,
+      orientation: "domme",
+    });
+
+    const result = await putStep(started.draft.id, "identity", {
+      owner_user_id: scope.owner,
+      expected_revision: 1,
+      pronouns: [],
+      dm_status: "open",
+      dm_status_selected: true,
+    });
+
+    expect(result.status).toBe(400);
+    expect(result.error?.code).toBe("pronouns_required");
+  });
+
+  it("defends publication when a completed global draft has no pronouns", async () => {
+    const owner = "500000000000000193";
+    const started = await startDraft({
+      owner_user_id: owner,
+      origin_guild_id: TEST_HOME_GUILD_ID,
+      target_scope: "global",
+    });
+    const draftId = started.draft.id;
+    await putStep(draftId, "orientation", {
+      owner_user_id: owner,
+      expected_revision: 0,
+      orientation: "domme",
+    });
+    await putStep(draftId, "identity", {
+      owner_user_id: owner,
+      expected_revision: 1,
+      pronouns: ["She/Her"],
+      dm_status: "open",
+      dm_status_selected: true,
+    });
+    await putStep(draftId, "links", {
+      owner_user_id: owner,
+      expected_revision: 2,
+      links: [],
+    });
+    await putStep(draftId, "throne", {
+      owner_user_id: owner,
+      expected_revision: 3,
+      throne_creator_id: null,
+      preferred_payment_link_id: null,
+    });
+    await putStep(draftId, "review", {
+      owner_user_id: owner,
+      expected_revision: 4,
+    });
+    await env.DB.prepare(
+      `DELETE FROM profile_document_selections
+        WHERE document_id = (SELECT document_id FROM profile_drafts WHERE id = ?)
+          AND category = 'pronoun'`,
+    )
+      .bind(draftId)
+      .run();
+
+    const result = await publish(draftId, {
+      owner_user_id: owner,
+      expected_revision: 5,
+    });
+
+    expect(result.status).toBe(400);
+    expect(result.error?.code).toBe("pronouns_required");
+  });
+
   it("persists partial identity selections without choosing a DM status or completing the step", async () => {
     const owner = "500000000000000090";
     const started = await startDraft({
@@ -334,6 +427,7 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
     const result = await putStep(started.draft.id, "identity", {
       owner_user_id: owner,
       expected_revision: 1,
+      pronouns: ["She/Her"],
       dm_status: "open",
       dm_status_selected: true,
       bio: "must not be written",
@@ -535,6 +629,7 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
       await putStep(draftId, "identity", {
         owner_user_id: owner,
         expected_revision: 1,
+        pronouns: ["She/Her"],
         dm_status: "open",
         dm_status_selected: true,
       });
@@ -588,6 +683,7 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
     await putStep(draftId, "identity", {
       owner_user_id: owner,
       expected_revision: 1,
+      pronouns: ["She/Her"],
       dm_status: "open",
       dm_status_selected: true,
     });
@@ -652,6 +748,65 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
 });
 
 describe("profile draft lifecycle (server scope)", () => {
+  it("requires nonempty effective inherited pronouns at completion and publish", async () => {
+    const owner = "500000000000000194";
+    const globalDocumentId = "linked-pronoun-global";
+    await seedDocument({
+      id: globalDocumentId,
+      ownerUserId: owner,
+      orientation: "domme",
+      dmStatus: "open",
+    });
+    await seedGlobalProfile(owner, globalDocumentId);
+    const started = await startDraft({
+      owner_user_id: owner,
+      origin_guild_id: OTHER_GUILD,
+      target_scope: "server",
+      guild_id: OTHER_GUILD,
+      server_mode: "linked",
+    });
+
+    const missingInherited = await putStep(started.draft.id, "identity", {
+      owner_user_id: owner,
+      expected_revision: 0,
+      overrides: [],
+      dm_status_selected: true,
+    });
+    expect(missingInherited.status).toBe(400);
+    expect(missingInherited.error?.code).toBe("pronouns_required");
+
+    await seedSelection(globalDocumentId, "pronoun", "She/Her");
+    const identity = await putStep(started.draft.id, "identity", {
+      owner_user_id: owner,
+      expected_revision: 0,
+      overrides: [],
+      dm_status_selected: true,
+    });
+    const links = await putStep(started.draft.id, "links", {
+      owner_user_id: owner,
+      expected_revision: (identity.draft as DraftBody).revision,
+      local_links: [],
+      hidden_inherited_link_ids: [],
+      preferred_payment_link_id: null,
+    });
+    const review = await putStep(started.draft.id, "review", {
+      owner_user_id: owner,
+      expected_revision: (links.draft as DraftBody).revision,
+    });
+    await env.DB.prepare(
+      "DELETE FROM profile_document_selections WHERE document_id = ? AND category = 'pronoun'",
+    )
+      .bind(globalDocumentId)
+      .run();
+
+    const result = await publish(started.draft.id, {
+      owner_user_id: owner,
+      expected_revision: (review.draft as DraftBody).revision,
+    });
+    expect(result.status).toBe(400);
+    expect(result.error?.code).toBe("pronouns_required");
+  });
+
   it("publishes an independent server profile distinct from any global profile", async () => {
     const owner = "500000000000000020";
     const started = await startDraft({
@@ -733,6 +888,16 @@ describe("profile draft lifecycle (server scope)", () => {
     });
     expect(linkedStart.draft.steps.map((s: { key: string }) => s.key)).toEqual(["identity", "links", "review"]);
     const linkedDraftId = linkedStart.draft.id;
+
+    const emptyPronounOverride = await putStep(linkedDraftId, "identity", {
+      owner_user_id: owner,
+      expected_revision: 0,
+      overrides: ["pronouns"],
+      pronouns: [],
+      dm_status_selected: true,
+    });
+    expect(emptyPronounOverride.status).toBe(400);
+    expect(emptyPronounOverride.error?.code).toBe("pronouns_required");
 
     const afterIdentity = await putStep(linkedDraftId, "identity", {
       owner_user_id: owner,

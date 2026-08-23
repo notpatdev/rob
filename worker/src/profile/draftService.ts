@@ -738,6 +738,25 @@ export async function applyDraftStep(env: Env, input: ApplyStepInput): Promise<D
     if (error instanceof ValidationError) badRequest(error.code, error.message);
     throw error;
   }
+  const linked = draft.target_scope === "server" && draft.server_mode === "linked";
+  if (input.stepKey === "identity" && completeStep) {
+    let effectivePronouns = newSnapshot.selections.pronouns;
+    if (linked && !newSnapshot.overriddenFields.includes("pronouns")) {
+      const globalRoot = await env.DB.prepare(
+        "SELECT current_document_id FROM global_profiles WHERE owner_user_id = ?",
+      )
+        .bind(draft.owner_user_id)
+        .first<{ current_document_id: string }>();
+      const globalSnapshot =
+        globalRoot === null
+          ? null
+          : await readDocumentSnapshot(env, globalRoot.current_document_id);
+      effectivePronouns = globalSnapshot?.selections.pronouns ?? [];
+    }
+    if (effectivePronouns.length === 0) {
+      badRequest("pronouns_required", "choose at least one pronoun before completing identity");
+    }
+  }
 
   // A step mutation may *optionally* carry a bookmark update, so a caller that
   // knows where it is sending the owner next can persist both in the one

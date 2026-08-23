@@ -207,6 +207,10 @@ export async function resolveThroneForDraft(env: Env, input: ResolveThroneInput)
   const now = nowIso();
   const expiresAt = new Date(Date.now() + PENDING_THRONE_TTL_MS).toISOString();
   const newRevision = draft.revision + 1;
+  const confirmationSubstep =
+    draft.wizard_substep === "review" || draft.wizard_substep?.startsWith("review:")
+      ? "review:confirm"
+      : "confirm";
 
   const results = await env.DB.batch([
     env.DB.prepare(
@@ -214,7 +218,7 @@ export async function resolveThroneForDraft(env: Env, input: ResolveThroneInput)
           SET pending_throne_token_hash = ?, pending_throne_public_creator_id = ?,
               pending_throne_handle = ?, pending_throne_profile_url = ?,
               pending_throne_expires_at = ?, wizard_stage = 'throne',
-              wizard_substep = 'confirm', revision = ?, updated_at = ?
+              wizard_substep = ?, revision = ?, updated_at = ?
         WHERE id = ? AND revision = ? AND status = 'active'`,
     ).bind(
       tokenHash,
@@ -222,6 +226,7 @@ export async function resolveThroneForDraft(env: Env, input: ResolveThroneInput)
       identity.handle,
       identity.profileUrl,
       expiresAt,
+      confirmationSubstep,
       newRevision,
       now,
       draft.id,

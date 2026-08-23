@@ -1,5 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { webhookVerificationStatement } from "../src/routes/webhookThrone";
+import { sha256Hex } from "../src/util/hash";
 import {
   callWorker,
   generateThroneKeyPair,
@@ -319,5 +321,34 @@ describe("POST /t/:creatorId/:routeSecret", () => {
       .bind(creatorId)
       .first<{ webhook_verified_at: string | null }>();
     expect(row?.webhook_verified_at).not.toBeNull();
+  });
+
+  it("does not let an old-secret in-flight request verify a rotated secret", async () => {
+    const { creatorId, secret } = await seedActiveCreatorAndGuild("verifyrace");
+    const authenticatedHash = await sha256Hex(secret);
+    const rotatedHash = await sha256Hex("rotated-secret");
+    await env.DB.prepare(
+      "UPDATE throne_creators SET route_secret_hash = ?, webhook_verified_at = NULL WHERE id = ?",
+    )
+      .bind(rotatedHash, creatorId)
+      .run();
+
+    const staleWrite = await webhookVerificationStatement(
+      env,
+      creatorId,
+      authenticatedHash,
+      new Date().toISOString(),
+    ).run();
+
+    expect(staleWrite.meta.changes).toBe(0);
+    const row = await env.DB.prepare(
+      "SELECT route_secret_hash, webhook_verified_at FROM throne_creators WHERE id = ?",
+    )
+      .bind(creatorId)
+      .first<{ route_secret_hash: string; webhook_verified_at: string | null }>();
+    expect(row).toEqual({
+      route_secret_hash: rotatedHash,
+      webhook_verified_at: null,
+    });
   });
 });

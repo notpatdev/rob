@@ -26,7 +26,9 @@ from bill.components.profile import (
     ProfileSelectDynamic,
     ProfileWizardDynamic,
     StatsSelect,
+    _adjacent_stage,
     _partial_identity_values,
+    _validate_continue,
     profile_intro_view,
     profile_wizard_view,
     wizard_custom_id,
@@ -51,6 +53,7 @@ from bill.worker_client import (
     PublicProfile,
     SendStat,
     ServerProfileMode,
+    ThroneDraftResult,
     ThronePending,
     WizardStage,
     WorkerClient,
@@ -487,7 +490,7 @@ def test_review_exposes_revision_bound_dm_status_editor_alongside_identity_modal
     ]
 
     assert len(dm_selects) == 1
-    assert dm_selects[0].custom_id == wizard_custom_id(state, "identity-dm-status")
+    assert dm_selects[0].custom_id == wizard_custom_id(state, "dm-status")
     assert [option.value for option in dm_selects[0].options if option.default] == ["open"]
     assert len(edit_buttons) == 1
 
@@ -509,6 +512,23 @@ def test_throne_confirmation_screen_survives_restart_without_secret_material() -
     assert "Try another handle" in encoded
     assert "confirmation_token" not in encoded
     assert "/t/" not in encoded
+
+
+def test_verified_throne_edit_preserves_return_to_review() -> None:
+    state = replace(
+        identity_draft(),
+        current_step=DraftStepKey.THRONE,
+        next_step=DraftStepKey.THRONE,
+        governing_orientation=Orientation.DOMME,
+        wizard_stage=WizardStage.THRONE,
+        wizard_substep="review:verified",
+        document=replace(identity_draft().document, throne_creator_id="creator"),
+    )
+
+    _validate_continue(state)
+
+    assert _adjacent_stage(state, forward=True) is WizardStage.REVIEW
+    assert "confirmed" in str(profile_wizard_view(state).to_components()).casefold()
 
 
 def test_profile_intro_start_control_is_persistent_and_disjoint() -> None:
@@ -574,6 +594,208 @@ async def test_profile_start_reloads_draft_after_restart_before_rendering() -> N
     assert response.content is None
     assert response.view is not None
     assert "-# Bill Profile Setup" in str(response.view.to_components())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "expected_stage"),
+    (("identity", WizardStage.PRONOUNS), ("links", WizardStage.LINKS)),
+)
+async def test_legacy_button_actions_reload_stale_draft_and_redirect(
+    action: str,
+    expected_stage: WizardStage,
+) -> None:
+    state = replace(identity_draft(), revision=8, wizard_stage=WizardStage.REVIEW)
+    moves: list[tuple[int, WizardStage, str | None]] = []
+    rendered: list[discord.ui.LayoutView] = []
+
+    class Worker:
+        async def get_draft(self, draft_id: str, *, owner_user_id: int) -> ProfileDraft:
+            assert (draft_id, owner_user_id) == (state.id, 1)
+            return state
+
+        async def set_draft_wizard_stage(
+            self,
+            draft_id: str,
+            *,
+            owner_user_id: int,
+            expected_revision: int,
+            stage: WizardStage,
+            substep: str | None,
+        ) -> ProfileDraft:
+            assert (draft_id, owner_user_id) == (state.id, 1)
+            moves.append((expected_revision, stage, substep))
+            return replace(state, revision=9, wizard_stage=stage, wizard_substep=substep)
+
+    class Bot:
+        def require_worker(self) -> Worker:
+            return Worker()
+
+    class DynamicResponse:
+        async def defer(self) -> None:
+            return None
+
+    async def edit_original_response(*, view: discord.ui.LayoutView) -> None:
+        rendered.append(view)
+
+    interaction = SimpleNamespace(
+        client=Bot(),
+        user=SimpleNamespace(id=1, display_name="Display Name", display_avatar=None),
+        guild_id=None,
+        message=object(),
+        response=DynamicResponse(),
+        edit_original_response=edit_original_response,
+    )
+    item = discord.ui.Button(label="Legacy", custom_id=wizard_custom_id(state, action))
+    dynamic = ProfileWizardDynamic(item, state.id, "1", state.origin_guild_id, 3, action)
+
+    await dynamic.callback(interaction)  # type: ignore[arg-type]
+
+    assert moves == [(8, expected_stage, "legacy")]
+    assert len(rendered) == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_identity_select_redirects_without_replaying_old_values() -> None:
+    state = replace(identity_draft(), revision=8, wizard_stage=WizardStage.REVIEW)
+    moves: list[tuple[int, WizardStage]] = []
+
+    class Worker:
+        async def get_draft(self, draft_id: str, *, owner_user_id: int) -> ProfileDraft:
+            assert (draft_id, owner_user_id) == (state.id, 1)
+            return state
+
+        async def set_draft_wizard_stage(
+            self,
+            draft_id: str,
+            *,
+            owner_user_id: int,
+            expected_revision: int,
+            stage: WizardStage,
+            substep: str | None,
+        ) -> ProfileDraft:
+            assert (draft_id, owner_user_id, substep) == (state.id, 1, "legacy")
+            moves.append((expected_revision, stage))
+            return replace(state, revision=9, wizard_stage=stage)
+
+        async def update_draft_step(self, *_: object, **__: object) -> ProfileDraft:
+            raise AssertionError("legacy selections must not replay obsolete mutations")
+
+    class Bot:
+        def require_worker(self) -> Worker:
+            return Worker()
+
+    class DynamicResponse:
+        async def defer(self) -> None:
+            return None
+
+    async def edit_original_response(*, view: discord.ui.LayoutView) -> None:
+        assert isinstance(view, discord.ui.LayoutView)
+
+    interaction = SimpleNamespace(
+        client=Bot(),
+        user=SimpleNamespace(id=1, display_name="Display Name", display_avatar=None),
+        guild_id=None,
+        message=object(),
+        response=DynamicResponse(),
+        edit_original_response=edit_original_response,
+    )
+    action = "identity-dm-status"
+    item = discord.ui.Select(
+        custom_id=wizard_custom_id(state, action),
+        options=[discord.SelectOption(label="Old choice", value="closed")],
+    )
+    item._values = []
+    dynamic = ProfileSelectDynamic(item, state.id, "1", state.origin_guild_id, 3, action)
+
+    await dynamic.callback(interaction)  # type: ignore[arg-type]
+
+    assert moves == [(8, WizardStage.DM_STATUS)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ("confirm-throne", "rotate"))
+async def test_one_time_webhook_url_is_sent_before_followup_worker_calls(action: str) -> None:
+    state = replace(
+        identity_draft(),
+        current_step=DraftStepKey.THRONE,
+        next_step=DraftStepKey.THRONE,
+        governing_orientation=Orientation.DOMME,
+        wizard_stage=WizardStage.THRONE,
+        wizard_substep="review",
+        throne_pending=ThronePending("creator", None),
+    )
+    mutated = replace(state, revision=4)
+    events: list[str] = []
+    private_messages: list[str] = []
+
+    class Worker:
+        async def get_draft(self, draft_id: str, *, owner_user_id: int) -> ProfileDraft:
+            events.append("load")
+            return state
+
+        async def attach_throne(self, *_: object, **__: object) -> ThroneDraftResult:
+            assert action == "confirm-throne"
+            events.append("mutate")
+            return ThroneDraftResult(mutated, "https://usebill.dev/t/creator/one-time", "issued")
+
+        async def rotate_throne(self, *_: object, **__: object) -> ThroneDraftResult:
+            assert action == "rotate"
+            events.append("mutate")
+            return ThroneDraftResult(mutated, "https://usebill.dev/t/creator/one-time", "rotated")
+
+        async def get_throne_status(self, *_: object, **__: object) -> None:
+            raise AssertionError("a newly issued URL already implies an unverified secret")
+
+        async def set_draft_wizard_stage(
+            self, *_: object, **kwargs: object
+        ) -> ProfileDraft:
+            assert events == ["defer", "load", "mutate", "url"]
+            assert kwargs["substep"] == "review:awaiting_verification"
+            events.append("stage")
+            return replace(mutated, revision=5, wizard_substep="review:awaiting_verification")
+
+    class Bot:
+        def require_worker(self) -> Worker:
+            return Worker()
+
+    class DynamicResponse:
+        async def defer(self) -> None:
+            events.append("defer")
+
+    class Followup:
+        async def send(
+            self,
+            content: str,
+            *,
+            ephemeral: bool,
+            view: discord.ui.View | None = None,
+        ) -> None:
+            assert ephemeral and view is None
+            private_messages.append(content)
+            events.append("url")
+
+    async def edit_original_response(*, view: discord.ui.LayoutView) -> None:
+        assert isinstance(view, discord.ui.LayoutView)
+        events.append("edit")
+
+    interaction = SimpleNamespace(
+        client=Bot(),
+        user=SimpleNamespace(id=1, display_name="Display Name", display_avatar=None),
+        guild_id=None,
+        message=object(),
+        response=DynamicResponse(),
+        followup=Followup(),
+        edit_original_response=edit_original_response,
+    )
+    item = discord.ui.Button(label="Throne", custom_id=wizard_custom_id(state, action))
+    dynamic = ProfileWizardDynamic(item, state.id, "1", state.origin_guild_id, 3, action)
+
+    await dynamic.callback(interaction)  # type: ignore[arg-type]
+
+    assert events == ["defer", "load", "mutate", "url", "stage", "edit"]
+    assert len(private_messages) == 1
+    assert private_messages[0].count("https://usebill.dev/t/creator/one-time") == 1
 
 
 @pytest.mark.asyncio
@@ -909,24 +1131,29 @@ async def test_review_dm_status_select_restores_linked_inheritance() -> None:
             return Worker()
 
     class SelectResponse:
+        async def defer(self) -> None:
+            return None
+
         async def edit_message(self, *, view: discord.ui.LayoutView) -> None:
             dm_select = next(
                 item for item in view.walk_children() if isinstance(item, DmStatusSelect)
             )
             assert [option.value for option in dm_select.options if option.default] == ["inherit"]
 
+    response = SelectResponse()
     interaction = SimpleNamespace(
         client=Bot(),
         user=SimpleNamespace(id=1, display_name="Display Name", display_avatar=None),
         guild_id=None,
-        response=SelectResponse(),
+        response=response,
+        edit_original_response=response.edit_message,
     )
     item = discord.ui.Select(
-        custom_id=wizard_custom_id(state, "identity-dm-status"),
+        custom_id=wizard_custom_id(state, "dm-status"),
         options=[discord.SelectOption(label="Use global setting", value="inherit")],
     )
     item._values = ["inherit"]
-    dynamic = ProfileSelectDynamic(item, "draft_1", "1", "2", 3, "identity-dm-status")
+    dynamic = ProfileSelectDynamic(item, "draft_1", "1", "2", 3, "dm-status")
 
     await dynamic.callback(interaction)  # type: ignore[arg-type]
 
@@ -944,6 +1171,7 @@ async def test_review_dm_status_select_restores_linked_inheritance() -> None:
                 "bio": None,
                 "public_send_stats": False,
                 "aliases": [],
+                "profile_color": None,
                 "complete": False,
                 "dm_status_selected": True,
                 "overrides": ["bio"],

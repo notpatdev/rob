@@ -1,5 +1,5 @@
 import type { RouteContext } from "../router.js";
-import { resolveConfig } from "../env.js";
+import { resolveConfig, type Env } from "../env.js";
 import { Errors, ok } from "../util/response.js";
 import { constantTimeEqualHex, sha256Hex } from "../util/hash.js";
 import { newId, nowIso } from "../util/id.js";
@@ -20,6 +20,17 @@ interface RegistrationRow {
 function isUniqueConstraintError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /UNIQUE constraint failed/i.test(message);
+}
+
+export function webhookVerificationStatement(
+  env: Env,
+  creatorId: string,
+  authenticatedRouteSecretHash: string,
+  verifiedAt: string,
+): D1PreparedStatement {
+  return env.DB.prepare(
+    "UPDATE throne_creators SET webhook_verified_at = ? WHERE id = ? AND route_secret_hash = ?",
+  ).bind(verifiedAt, creatorId, authenticatedRouteSecretHash);
 }
 
 export async function handleThroneWebhook(ctx: RouteContext): Promise<Response> {
@@ -87,9 +98,15 @@ export async function handleThroneWebhook(ctx: RouteContext): Promise<Response> 
   if (parsed.isTest || isKnownTestSender) {
     // Explicit test events (and configured test senders) verify the webhook
     // but never create an event, send, or notification.
-    await ctx.env.DB.prepare("UPDATE throne_creators SET webhook_verified_at = ? WHERE id = ?")
-      .bind(nowIso(), creatorId)
-      .run();
+    const verification = await webhookVerificationStatement(
+      ctx.env,
+      creatorId,
+      presentedHash,
+      nowIso(),
+    ).run();
+    if (verification.meta.changes !== 1) {
+      return Errors.notFound("Route not found");
+    }
     return ok({ status: "test", verified: true });
   }
 
@@ -109,7 +126,11 @@ export async function handleThroneWebhook(ctx: RouteContext): Promise<Response> 
        id, creator_id, raw_type, normalized_type, event_id, order_id, fallback_hash,
        amount_minor, currency, sender_username, sender_display_name, item_name, item_image_url,
        is_private, is_anonymous, purchased_at, received_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     )
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM throne_creators WHERE id = ? AND route_secret_hash = ?
+      )`,
   ).bind(
     eventRowId,
     creatorId,
@@ -128,11 +149,16 @@ export async function handleThroneWebhook(ctx: RouteContext): Promise<Response> 
     parsed.isAnonymous ? 1 : 0,
     parsed.purchasedAt,
     receivedAt,
+    creatorId,
+    presentedHash,
   );
 
-  const markVerifiedStmt = ctx.env.DB.prepare(
-    "UPDATE throne_creators SET webhook_verified_at = ? WHERE id = ?",
-  ).bind(receivedAt, creatorId);
+  const markVerifiedStmt = webhookVerificationStatement(
+    ctx.env,
+    creatorId,
+    presentedHash,
+    receivedAt,
+  );
 
   // Attribution only ever runs when the parser has a sender name to match at all; it has already
   // nulled both sender fields for private/anonymous events, so those never reach this branch.
@@ -154,17 +180,27 @@ export async function handleThroneWebhook(ctx: RouteContext): Promise<Response> 
     const notificationId = newId();
     fanOutStatements.push(
       ctx.env.DB.prepare(
-        "INSERT INTO sends (id, event_id, guild_id, registration_id, sender_discord_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-      ).bind(sendId, eventRowId, registration.guild_id, registration.id, senderDiscordUserId, receivedAt),
+        `INSERT INTO sends (id, event_id, guild_id, registration_id, sender_discord_user_id, created_at)
+         SELECT ?, ?, ?, ?, ?, ?
+          WHERE EXISTS (SELECT 1 FROM throne_events WHERE id = ?)`,
+      ).bind(sendId, eventRowId, registration.guild_id, registration.id, senderDiscordUserId, receivedAt, eventRowId),
       ctx.env.DB.prepare(
         `INSERT INTO notifications (id, send_id, status, attempts, max_attempts, next_attempt_at, created_at, updated_at)
-         VALUES (?, ?, 'pending', 0, ?, ?, ?, ?)`,
-      ).bind(notificationId, sendId, maxAttempts, receivedAt, receivedAt, receivedAt),
+         SELECT ?, ?, 'pending', 0, ?, ?, ?, ?
+          WHERE EXISTS (SELECT 1 FROM sends WHERE id = ?)`,
+      ).bind(notificationId, sendId, maxAttempts, receivedAt, receivedAt, receivedAt, sendId),
     );
   }
 
   try {
-    await ctx.env.DB.batch([insertEventStmt, markVerifiedStmt, ...fanOutStatements]);
+    const results = await ctx.env.DB.batch([
+      insertEventStmt,
+      markVerifiedStmt,
+      ...fanOutStatements,
+    ]);
+    if (results[1]?.meta.changes !== 1) {
+      return Errors.notFound("Route not found");
+    }
   } catch (error) {
     if (!isUniqueConstraintError(error)) {
       console.error("Failed to record Throne event", error instanceof Error ? error.message : "unknown");
@@ -174,9 +210,15 @@ export async function handleThroneWebhook(ctx: RouteContext): Promise<Response> 
     // batch above rolled back entirely, so no partial fan-out occurred. A
     // duplicate of a real, supported event still proves the webhook works,
     // so it marks verification on its own.
-    await ctx.env.DB.prepare("UPDATE throne_creators SET webhook_verified_at = ? WHERE id = ?")
-      .bind(nowIso(), creatorId)
-      .run();
+    const verification = await webhookVerificationStatement(
+      ctx.env,
+      creatorId,
+      presentedHash,
+      nowIso(),
+    ).run();
+    if (verification.meta.changes !== 1) {
+      return Errors.notFound("Route not found");
+    }
     return ok({ status: "duplicate" });
   }
 

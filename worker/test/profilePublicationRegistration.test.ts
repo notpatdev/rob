@@ -28,7 +28,13 @@ async function seedCompletedDraft(options: {
   )
     .bind(options.draftId, options.owner, TEST_HOME_GUILD_ID, options.documentId, now, now)
     .run();
-  for (const step of ["orientation", "identity", "links", "throne"]) {
+  for (const step of [
+    "orientation",
+    "identity",
+    "links",
+    "throne",
+    "identity_dm_status_selected",
+  ]) {
     await env.DB.prepare(
       `INSERT INTO profile_draft_steps (draft_id, step_key, status, completed_at)
        VALUES (?, ?, 'completed', ?)`,

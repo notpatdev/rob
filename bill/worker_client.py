@@ -208,6 +208,7 @@ class ProfileDraft:
     created_at: str | None
     updated_at: str | None
     published_at: str | None
+    dm_status_selected: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -860,6 +861,7 @@ class WorkerClient:
             _optional_string(data.get("created_at")),
             _optional_string(data.get("updated_at")),
             _optional_string(data.get("published_at")),
+            _bool(data.get("dm_status_selected"), "dm_status_selected"),
         )
 
     @staticmethod

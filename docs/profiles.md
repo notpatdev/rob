@@ -29,8 +29,12 @@ completing the identity step, so a restart can reconstruct partial progress.
 Global and independent profiles must deliberately choose Open, By Request,
 After Tribute, or Closed before saving identity. A linked server profile may
 instead choose **Use global setting**, which removes its server-specific DM
-status override. Restart is explicit and revision-checked. Publication changes
-the public root only during the final review action.
+status override. That deliberate choice is tracked separately from the saved
+status value, so active drafts created before the menu cannot mistake an old
+implicit Open value for user intent. The review screen exposes the same
+revision-bound menu for changing a status or restoring linked inheritance.
+Restart is explicit and revision-checked. Publication changes the public root
+only during the final review action.
 
 The four orientations are Dom/me, Submissive, Switch leaning Dom/me, and Switch
 leaning Submissive. All support pronouns, DM status, an optional 300-character

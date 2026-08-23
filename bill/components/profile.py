@@ -386,9 +386,11 @@ def profile_wizard_view(
         container.add_item(
             discord.ui.TextDisplay(
                 "Review the completed sections above. You can edit any section now; "
-                "nothing becomes public until you choose **Publish**."
+                "nothing becomes public until you choose **Publish**. Change your DM status "
+                "below, including restoring the global setting for a linked profile."
             )
         )
+        container.add_item(discord.ui.ActionRow(DmStatusSelect(draft)))
         edits = [
             _button(draft, "Edit identity", "identity", discord.ButtonStyle.secondary),
             _button(draft, "Edit links", "links", discord.ButtonStyle.secondary),
@@ -511,7 +513,11 @@ class DmStatusSelect(discord.ui.Select):
                 label=label,
                 value=status.value,
                 description=description,
-                default=not inherited and draft.document.dm_status is status,
+                default=(
+                    draft.dm_status_selected
+                    and not inherited
+                    and draft.document.dm_status is status
+                ),
             )
             for status, label, description in DM_STATUS_OPTIONS
         ]
@@ -521,7 +527,7 @@ class DmStatusSelect(discord.ui.Select):
                     label="Use global setting",
                     value="inherit",
                     description="Follow your current global DM status",
-                    default=inherited,
+                    default=draft.dm_status_selected and inherited,
                 )
             )
         super().__init__(
@@ -970,6 +976,17 @@ def _partial_identity_values(
         draft.target_scope is DraftScope.SERVER and draft.server_mode is ServerProfileMode.LINKED
     )
     overrides = set(draft.document.overridden_fields)
+    honourific_available, label_available, aliases_available, _, stats_available = _caps(
+        draft.governing_orientation
+    )
+    if not honourific_available:
+        overrides.discard("honourifics")
+    if not label_available:
+        overrides.discard("submissive_labels")
+    if not aliases_available:
+        overrides.discard("aliases")
+    if not stats_available:
+        overrides.discard("public_send_stats")
     status = draft.document.dm_status.value if draft.document.dm_status else None
     if field == "dm-status":
         if len(selected) != 1:
@@ -1010,6 +1027,8 @@ def _partial_identity_values(
         "aliases": list(draft.document.aliases),
         "complete": False,
     }
+    if field == "dm-status":
+        values["dm_status_selected"] = True
     if linked:
         values["overrides"] = sorted(overrides)
     return values

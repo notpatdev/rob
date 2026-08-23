@@ -18,7 +18,7 @@ import { newId, nowIso } from "../util/id.js";
 import { LIMITS, ORIENTATION_CAPABILITIES, stepsForDraft, type StepKey } from "./contracts.js";
 import { readDocumentSnapshot } from "./documentStore.js";
 import { resolveProfile, type ResolvedProfile } from "./resolver.js";
-import { DraftError } from "./draftService.js";
+import { DM_STATUS_SELECTION_STEP_KEY, DraftError } from "./draftService.js";
 import {
   buildRegistrationProjectionStatements,
   collectPublishRegistrationProjections,
@@ -101,15 +101,18 @@ export async function publishDraft(env: Env, input: PublishDraftInput): Promise<
     "SELECT step_key, status FROM profile_draft_steps WHERE draft_id = ?",
   )
     .bind(draft.id)
-    .all<{ step_key: StepKey; status: "pending" | "completed" }>();
+    .all<{ step_key: string; status: "pending" | "completed" }>();
   const completed = new Set(stepRows.filter((row) => row.status === "completed").map((row) => row.step_key));
   const missing = requiredSteps.filter((step) => !completed.has(step));
   if (missing.length > 0) {
     badRequest("steps_incomplete", `the following steps must be completed before publishing: ${missing.join(", ")}`);
   }
-  // Completing the `identity` step always sets dm_status (see `parseIdentityStep`/
-  // `parseLinkedIdentityStep`), so requiring that step above already guarantees this;
-  // this is just a defense-in-depth check against a future step-tracking bug.
+  if (!completed.has(DM_STATUS_SELECTION_STEP_KEY)) {
+    badRequest(
+      "dm_status_selection_required",
+      "a DM status or linked inheritance must be explicitly selected before publishing",
+    );
+  }
   if (!linked && snapshot.dmStatus === null) {
     badRequest("dm_status_required", "dm_status must be chosen before publishing");
   }

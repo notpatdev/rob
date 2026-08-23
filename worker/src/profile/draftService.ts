@@ -42,6 +42,8 @@ import {
   type DocumentSnapshot,
 } from "./documentStore.js";
 
+export const DM_STATUS_SELECTION_STEP_KEY = "identity_dm_status_selected";
+
 export class DraftError extends Error {
   readonly status: number;
   readonly code: string;
@@ -88,12 +90,12 @@ export async function loadOwnedDraft(env: Env, draftId: string, ownerUserId: str
 }
 
 interface StepStatusRow {
-  step_key: StepKey;
+  step_key: string;
   status: "pending" | "completed";
   completed_at: string | null;
 }
 
-async function loadStepStatuses(env: Env, draftId: string): Promise<Map<StepKey, StepStatusRow>> {
+async function loadStepStatuses(env: Env, draftId: string): Promise<Map<string, StepStatusRow>> {
   const { results } = await env.DB.prepare(
     "SELECT step_key, status, completed_at FROM profile_draft_steps WHERE draft_id = ?",
   )
@@ -128,6 +130,7 @@ export interface DraftContract {
   readonly currentStep: StepKey;
   readonly nextStep: StepKey | null;
   readonly steps: { key: StepKey; status: "pending" | "completed"; completedAt: string | null }[];
+  readonly dmStatusSelected: boolean;
   readonly governingOrientation: Orientation | null;
   readonly document: {
     dmStatus: DocumentSnapshot["dmStatus"];
@@ -203,9 +206,17 @@ export async function buildContract(env: Env, draft: DraftRow): Promise<DraftCon
   const governingOrientation = await resolveGoverningOrientation(env, draft, snapshot);
   const steps = stepsForDraft(draft.target_scope, draft.server_mode, governingOrientation);
   const statuses = await loadStepStatuses(env, draft.id);
+  const dmStatusSelected =
+    statuses.get(DM_STATUS_SELECTION_STEP_KEY)?.status === "completed";
   const stepList = steps.map((key) => {
     const found = statuses.get(key);
-    return { key, status: found?.status ?? ("pending" as const), completedAt: found?.completed_at ?? null };
+    const completed =
+      found?.status === "completed" && (key !== "identity" || dmStatusSelected);
+    return {
+      key,
+      status: completed ? ("completed" as const) : ("pending" as const),
+      completedAt: completed ? (found?.completed_at ?? null) : null,
+    };
   });
   const nextStep = stepList.find((step) => step.status === "pending")?.key ?? null;
   const thronePrefill = await loadThronePrefill(env, draft, governingOrientation);
@@ -223,6 +234,7 @@ export async function buildContract(env: Env, draft: DraftRow): Promise<DraftCon
     currentStep: draft.current_step,
     nextStep,
     steps: stepList,
+    dmStatusSelected,
     governingOrientation,
     document: {
       dmStatus: snapshot.dmStatus,
@@ -376,7 +388,6 @@ export async function startDraft(env: Env, input: StartDraftInput): Promise<Star
       now,
     ),
   ];
-
   try {
     await env.DB.batch(statements);
   } catch {
@@ -429,6 +440,7 @@ async function computeNewSnapshot(
   governingOrientation: Orientation | null,
   body: unknown,
   completeStep: boolean,
+  dmStatusSelected: boolean,
 ): Promise<DocumentSnapshot> {
   const linked = draft.target_scope === "server" && draft.server_mode === "linked";
 
@@ -459,7 +471,11 @@ async function computeNewSnapshot(
         overriddenFields: Array.from(parsed.overriddenFields),
       };
     }
-    const parsed = parseIdentityStep(body, governingOrientation, !completeStep);
+    const parsed = parseIdentityStep(
+      body,
+      governingOrientation,
+      !completeStep && !dmStatusSelected,
+    );
     return {
       ...current,
       dmStatus: parsed.dmStatus,
@@ -564,6 +580,26 @@ export async function applyDraftStep(env: Env, input: ApplyStepInput): Promise<D
   if (!completeStep && input.stepKey !== "identity") {
     badRequest("partial_step_not_supported", "only identity supports partial draft persistence");
   }
+  const selectedValue = bodyRecord?.dm_status_selected;
+  if (selectedValue !== undefined && typeof selectedValue !== "boolean") {
+    badRequest("invalid_dm_status_selected", "dm_status_selected must be a boolean when provided");
+  }
+  const dmStatusSelected = input.stepKey === "identity" && selectedValue === true;
+  let dmStatusPreviouslySelected = false;
+  if (input.stepKey === "identity") {
+    const marker = await env.DB.prepare(
+      "SELECT status FROM profile_draft_steps WHERE draft_id = ? AND step_key = ?",
+    )
+      .bind(draft.id, DM_STATUS_SELECTION_STEP_KEY)
+      .first<{ status: "pending" | "completed" }>();
+    dmStatusPreviouslySelected = marker?.status === "completed";
+    if (completeStep && !dmStatusSelected && !dmStatusPreviouslySelected) {
+      badRequest(
+        "dm_status_selection_required",
+        "choose a DM status from the menu before completing identity",
+      );
+    }
+  }
 
   let newSnapshot: DocumentSnapshot;
   try {
@@ -575,6 +611,7 @@ export async function applyDraftStep(env: Env, input: ApplyStepInput): Promise<D
       governingOrientation,
       input.body,
       completeStep,
+      dmStatusSelected,
     );
   } catch (error) {
     if (error instanceof ValidationError) badRequest(error.code, error.message);
@@ -591,6 +628,14 @@ export async function applyDraftStep(env: Env, input: ApplyStepInput): Promise<D
       guard,
     }),
   ];
+  if (dmStatusSelected) {
+    statements.push(env.DB.prepare(
+      `INSERT INTO profile_draft_steps (draft_id, step_key, status, completed_at)
+       SELECT ?, ?, 'completed', ?
+       WHERE EXISTS (SELECT 1 FROM profile_drafts WHERE id = ? AND revision = ? AND status = 'active')
+       ON CONFLICT (draft_id, step_key) DO UPDATE SET status = 'completed', completed_at = excluded.completed_at`,
+    ).bind(draft.id, DM_STATUS_SELECTION_STEP_KEY, now, draft.id, draft.revision));
+  }
   if (completeStep) {
     statements.push(env.DB.prepare(
       `INSERT INTO profile_draft_steps (draft_id, step_key, status, completed_at)

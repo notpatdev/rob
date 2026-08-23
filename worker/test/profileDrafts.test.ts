@@ -16,6 +16,7 @@ interface DraftBody {
   current_step: string;
   next_step: string | null;
   steps: { key: string; status: string }[];
+  dm_status_selected: boolean;
   document: Record<string, unknown>;
 }
 interface ProfileEnvelope {
@@ -110,18 +111,30 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
       honourifics: [],
       submissive_labels: [],
       dm_status: "by_request",
+      dm_status_selected: true,
       bio: null,
       public_send_stats: false,
       aliases: [],
     });
     expect(withDmStatus.status).toBe(200);
     expect(withDmStatus.draft?.next_step).toBe("identity");
+    expect(withDmStatus.draft?.dm_status_selected).toBe(true);
     expect(withDmStatus.draft?.document.dm_status).toBe("by_request");
     expect(withDmStatus.draft?.document.selections).toEqual({
       pronouns: ["She/Her"],
       honourifics: [],
       submissive_labels: [],
     });
+
+    const resumed = await startDraft({
+      owner_user_id: owner,
+      origin_guild_id: TEST_HOME_GUILD_ID,
+      target_scope: "global",
+    });
+    expect(resumed.resume_required).toBe(true);
+    expect(resumed.draft.id).toBe(draftId);
+    expect(resumed.draft.dm_status_selected).toBe(true);
+    expect(resumed.draft.document.dm_status).toBe("by_request");
 
     const completed = await putStep(draftId, "identity", {
       owner_user_id: owner,
@@ -164,6 +177,7 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
       pronouns: ["She/Her"],
       honourifics: ["Goddess"],
       dm_status: "open",
+      dm_status_selected: true,
       bio: "Hello there",
       public_send_stats: false,
     });
@@ -321,6 +335,7 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
       owner_user_id: owner,
       expected_revision: 1,
       dm_status: "open",
+      dm_status_selected: true,
       bio: "must not be written",
     });
     expect(result.status).toBe(409);
@@ -369,16 +384,136 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
     });
     expect(afterOrientation.draft?.current_step).toBe("orientation");
 
-    const restarted = await restart(draftId, { owner_user_id: owner, expected_revision: 1 });
+    const selected = await putStep(draftId, "identity", {
+      owner_user_id: owner,
+      expected_revision: 1,
+      complete: false,
+      dm_status: "closed",
+      dm_status_selected: true,
+    });
+    expect(selected.draft?.dm_status_selected).toBe(true);
+
+    const restarted = await restart(draftId, { owner_user_id: owner, expected_revision: 2 });
     expect(restarted.status).toBe(200);
-    expect(restarted.draft?.revision).toBe(2);
+    expect(restarted.draft?.revision).toBe(3);
     expect(restarted.draft?.current_step).toBe("orientation");
     expect(restarted.draft?.steps.every((s) => s.status === "pending")).toBe(true);
+    expect(restarted.draft?.dm_status_selected).toBe(false);
     expect((restarted.draft?.document as { orientation?: unknown } | undefined)?.orientation).toBeUndefined();
 
     const reread = await getDraft(draftId, owner);
+    expect(reread.draft?.dm_status_selected).toBe(false);
     expect(reread.draft?.document.selections).toEqual({ pronouns: [], honourifics: [], submissive_labels: [] });
   });
+
+  it.each([
+    {
+      label: "global",
+      owner: "500000000000000091",
+      draftId: "legacy-global-draft",
+      documentId: "legacy-global-document",
+      targetScope: "global",
+      guildId: null,
+      serverMode: null,
+      originGuildId: TEST_HOME_GUILD_ID,
+    },
+    {
+      label: "independent",
+      owner: "500000000000000092",
+      draftId: "legacy-independent-draft",
+      documentId: "legacy-independent-document",
+      targetScope: "server",
+      guildId: OTHER_GUILD,
+      serverMode: "independent",
+      originGuildId: OTHER_GUILD,
+    },
+  ])(
+    "requires a deliberate status for a legacy $label draft whose Open value was implicit",
+    async ({
+      owner,
+      draftId,
+      documentId,
+      targetScope,
+      guildId,
+      serverMode,
+      originGuildId,
+    }) => {
+      const now = new Date().toISOString();
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO profile_documents
+             (id, owner_user_id, state, orientation, dm_status, created_at, updated_at)
+           VALUES (?, ?, 'draft', 'domme', 'open', ?, ?)`,
+        ).bind(documentId, owner, now, now),
+        env.DB.prepare(
+          `INSERT INTO profile_drafts
+             (id, owner_user_id, origin_guild_id, target_scope, guild_id, server_mode,
+              document_id, base_version, status, current_step, revision, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'active', 'review', 4, ?, ?)`,
+        ).bind(
+          draftId,
+          owner,
+          originGuildId,
+          targetScope,
+          guildId,
+          serverMode,
+          documentId,
+          now,
+          now,
+        ),
+        ...["orientation", "identity", "links", "throne"].map((step) =>
+          env.DB.prepare(
+            `INSERT INTO profile_draft_steps (draft_id, step_key, status, completed_at)
+             VALUES (?, ?, 'completed', ?)`,
+          ).bind(draftId, step, now),
+        ),
+      ]);
+
+      const legacy = await getDraft(draftId, owner);
+      expect(legacy.draft?.document.dm_status).toBe("open");
+      expect(legacy.draft?.dm_status_selected).toBe(false);
+      expect(legacy.draft?.next_step).toBe("identity");
+      expect(legacy.draft?.steps.find((step) => step.key === "identity")?.status).toBe("pending");
+
+      const implicitCompletion = await putStep(draftId, "identity", {
+        owner_user_id: owner,
+        expected_revision: 4,
+        dm_status: "open",
+      });
+      expect(implicitCompletion.status).toBe(400);
+      expect(implicitCompletion.error?.code).toBe("dm_status_selection_required");
+
+      const implicitPublish = await publish(draftId, {
+        owner_user_id: owner,
+        expected_revision: 4,
+      });
+      expect(implicitPublish.status).toBe(400);
+      expect(implicitPublish.error?.code).toBe("dm_status_selection_required");
+
+      const unrelatedPartial = await putStep(draftId, "identity", {
+        owner_user_id: owner,
+        expected_revision: 4,
+        complete: false,
+        pronouns: ["She/Her"],
+        dm_status: "open",
+      });
+      expect(unrelatedPartial.status).toBe(200);
+      expect(unrelatedPartial.draft?.dm_status_selected).toBe(false);
+      expect(unrelatedPartial.draft?.next_step).toBe("identity");
+
+      const deliberate = await putStep(draftId, "identity", {
+        owner_user_id: owner,
+        expected_revision: 5,
+        complete: false,
+        pronouns: ["She/Her"],
+        dm_status: "open",
+        dm_status_selected: true,
+      });
+      expect(deliberate.status).toBe(200);
+      expect(deliberate.draft?.dm_status_selected).toBe(true);
+      expect(deliberate.draft?.document.dm_status).toBe("open");
+    },
+  );
 
   it("rejects publish when required steps are incomplete", async () => {
     const owner = "500000000000000016";
@@ -401,6 +536,7 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
         owner_user_id: owner,
         expected_revision: 1,
         dm_status: "open",
+        dm_status_selected: true,
       });
       await putStep(draftId, "links", { owner_user_id: owner, expected_revision: 2, links: [] });
       await putStep(draftId, "throne", {
@@ -453,6 +589,7 @@ describe("profile draft lifecycle (global scope, domme orientation)", () => {
       owner_user_id: owner,
       expected_revision: 1,
       dm_status: "open",
+      dm_status_selected: true,
     });
     await putStep(draftId, "links", {
       owner_user_id: owner,
@@ -533,6 +670,7 @@ describe("profile draft lifecycle (server scope)", () => {
       honourifics: ["Master"],
       submissive_labels: ["Pet"],
       dm_status: "by_request",
+      dm_status_selected: true,
       aliases: ["Buddy"],
       public_send_stats: true,
     });
@@ -566,6 +704,7 @@ describe("profile draft lifecycle (server scope)", () => {
       expected_revision: 1,
       pronouns: ["She/Her"],
       dm_status: "open",
+      dm_status_selected: true,
       bio: "global bio",
     });
     await putStep(globalDraftId, "links", {
@@ -600,6 +739,7 @@ describe("profile draft lifecycle (server scope)", () => {
       expected_revision: 0,
       overrides: ["dm_status"],
       dm_status: "closed",
+      dm_status_selected: true,
     });
     expect(afterIdentity.status).toBe(200);
 
@@ -615,14 +755,28 @@ describe("profile draft lifecycle (server scope)", () => {
     expect(afterLinks.status).toBe(200);
 
     await putStep(linkedDraftId, "review", { owner_user_id: owner, expected_revision: 2 });
-    const published = await publish(linkedDraftId, { owner_user_id: owner, expected_revision: 3 });
+    const restoredInheritance = await putStep(linkedDraftId, "identity", {
+      owner_user_id: owner,
+      expected_revision: 3,
+      complete: false,
+      overrides: [],
+      dm_status: null,
+      dm_status_selected: true,
+    });
+    expect(restoredInheritance.status).toBe(200);
+    expect(restoredInheritance.draft?.next_step).toBeNull();
+    expect(restoredInheritance.draft?.dm_status_selected).toBe(true);
+    expect(restoredInheritance.draft?.document.dm_status).toBeNull();
+    expect(restoredInheritance.draft?.document.overridden_fields).not.toContain("dm_status");
+
+    const published = await publish(linkedDraftId, { owner_user_id: owner, expected_revision: 4 });
     expect(published.status).toBe(200);
     expect(published.profile?.mode).toBe("linked");
-    expect(published.profile?.dm_status).toBe("closed");
+    expect(published.profile?.dm_status).toBe("open");
     expect(published.profile?.bio).toBe("global bio");
 
     const looked = await lookup(OTHER_GUILD_2, owner);
-    expect(looked.profile?.dm_status).toBe("closed");
+    expect(looked.profile?.dm_status).toBe("open");
     expect(looked.profile?.bio).toBe("global bio");
     const links = looked.profile?.links as { platform: string }[];
     expect(links.some((l) => l.platform === "onlyfans")).toBe(true);

@@ -13,6 +13,7 @@ function serializeDraftContract(draft: DraftContract) {
     current_step: draft.currentStep,
     next_step: draft.nextStep,
     steps: draft.steps.map((step) => ({ key: step.key, status: step.status, completed_at: step.completedAt })),
+    dm_status_selected: draft.dmStatusSelected,
     document: {
       links: draft.document.links.map((link) => ({
         id: link.id,

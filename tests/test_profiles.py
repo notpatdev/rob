@@ -87,6 +87,7 @@ def draft(*, next_step: DraftStepKey | None = DraftStepKey.ORIENTATION) -> Profi
         current_step=next_step,
         next_step=next_step,
         steps=(DraftStep(DraftStepKey.ORIENTATION, "pending", None),),
+        dm_status_selected=False,
         governing_orientation=None,
         document=DraftDocument(
             None,
@@ -113,6 +114,7 @@ def identity_draft(
     scope: DraftScope = DraftScope.GLOBAL,
     mode: ServerProfileMode | None = None,
     overrides: tuple[str, ...] = (),
+    dm_status_selected: bool | None = None,
 ) -> ProfileDraft:
     state = draft(next_step=DraftStepKey.IDENTITY)
     return replace(
@@ -121,6 +123,11 @@ def identity_draft(
         guild_id="2" if scope is DraftScope.SERVER else None,
         server_mode=mode,
         current_step=DraftStepKey.IDENTITY,
+        dm_status_selected=(
+            status is not None or mode is ServerProfileMode.LINKED
+            if dm_status_selected is None
+            else dm_status_selected
+        ),
         governing_orientation=Orientation.SWITCH_DOMME,
         document=replace(
             state.document,
@@ -459,6 +466,31 @@ def test_profile_wizard_collapses_throne_state_without_exposing_creator_id() -> 
     assert "private_creator_id" not in encoded
 
 
+def test_review_exposes_revision_bound_dm_status_editor_alongside_identity_modal() -> None:
+    state = replace(
+        identity_draft(status=DmStatus.OPEN),
+        current_step=DraftStepKey.REVIEW,
+        next_step=DraftStepKey.REVIEW,
+        steps=(
+            DraftStep(DraftStepKey.IDENTITY, "completed", None),
+            DraftStep(DraftStepKey.REVIEW, "pending", None),
+        ),
+    )
+
+    items = _all_items(profile_wizard_view(state))
+    dm_selects = [item for item in items if isinstance(item, DmStatusSelect)]
+    edit_buttons = [
+        item
+        for item in items
+        if isinstance(item, discord.ui.Button) and item.label == "Edit identity"
+    ]
+
+    assert len(dm_selects) == 1
+    assert dm_selects[0].custom_id == wizard_custom_id(state, "identity-dm-status")
+    assert [option.value for option in dm_selects[0].options if option.default] == ["open"]
+    assert len(edit_buttons) == 1
+
+
 def test_profile_intro_start_control_is_persistent_and_disjoint() -> None:
     view = profile_intro_view(draft())
     button = view.children[0]
@@ -638,6 +670,17 @@ def test_non_linked_dm_status_menu_defaults_only_to_saved_choice(
     assert [option.value for option in select.options if option.default] == ["after_tribute"]
 
 
+def test_legacy_implicit_open_is_not_rendered_as_an_explicit_default() -> None:
+    select = DmStatusSelect(
+        identity_draft(
+            status=DmStatus.OPEN,
+            dm_status_selected=False,
+        )
+    )
+
+    assert not any(option.default for option in select.options)
+
+
 def test_linked_dm_status_menu_defaults_to_inheritance_or_explicit_override() -> None:
     linked = identity_draft(scope=DraftScope.SERVER, mode=ServerProfileMode.LINKED)
     inherited = DmStatusSelect(linked)
@@ -693,6 +736,7 @@ def test_dm_status_partial_mutation_preserves_other_identity_fields() -> None:
         "public_send_stats": True,
         "aliases": ["alias"],
         "complete": False,
+        "dm_status_selected": True,
     }
 
 
@@ -709,6 +753,7 @@ def test_linked_inherit_partial_removes_only_dm_status_override() -> None:
     assert values["dm_status"] is None
     assert values["overrides"] == ["bio"]
     assert values["complete"] is False
+    assert values["dm_status_selected"] is True
 
 
 def test_identity_completion_requires_non_linked_dm_status() -> None:
@@ -784,6 +829,87 @@ async def test_dm_status_select_persists_revision_bound_partial_mutation() -> No
                 "public_send_stats": False,
                 "aliases": [],
                 "complete": False,
+                "dm_status_selected": True,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_review_dm_status_select_restores_linked_inheritance() -> None:
+    state = replace(
+        identity_draft(
+            status=DmStatus.CLOSED,
+            scope=DraftScope.SERVER,
+            mode=ServerProfileMode.LINKED,
+            overrides=("dm_status", "bio", "submissive_labels", "aliases"),
+        ),
+        current_step=DraftStepKey.REVIEW,
+        next_step=DraftStepKey.REVIEW,
+        governing_orientation=Orientation.DOMME,
+    )
+    calls: list[dict[str, object]] = []
+
+    class Worker:
+        async def get_draft(self, draft_id: str, *, owner_user_id: int) -> ProfileDraft:
+            assert (draft_id, owner_user_id) == ("draft_1", 1)
+            return state
+
+        async def update_draft_step(self, draft_id: str, **kwargs: object) -> ProfileDraft:
+            calls.append({"draft_id": draft_id, **kwargs})
+            return replace(
+                state,
+                revision=4,
+                document=replace(
+                    state.document,
+                    dm_status=None,
+                    overridden_fields=("bio",),
+                ),
+            )
+
+    class Bot:
+        def require_worker(self) -> Worker:
+            return Worker()
+
+    class SelectResponse:
+        async def edit_message(self, *, view: discord.ui.LayoutView) -> None:
+            dm_select = next(
+                item for item in view.walk_children() if isinstance(item, DmStatusSelect)
+            )
+            assert [option.value for option in dm_select.options if option.default] == ["inherit"]
+
+    interaction = SimpleNamespace(
+        client=Bot(),
+        user=SimpleNamespace(id=1, display_name="Display Name", display_avatar=None),
+        guild_id=None,
+        response=SelectResponse(),
+    )
+    item = discord.ui.Select(
+        custom_id=wizard_custom_id(state, "identity-dm-status"),
+        options=[discord.SelectOption(label="Use global setting", value="inherit")],
+    )
+    item._values = ["inherit"]
+    dynamic = ProfileSelectDynamic(item, "draft_1", "1", "2", 3, "identity-dm-status")
+
+    await dynamic.callback(interaction)  # type: ignore[arg-type]
+
+    assert calls == [
+        {
+            "draft_id": "draft_1",
+            "step": DraftStepKey.IDENTITY,
+            "owner_user_id": 1,
+            "expected_revision": 3,
+            "values": {
+                "pronouns": [],
+                "honourifics": [],
+                "submissive_labels": [],
+                "dm_status": None,
+                "bio": None,
+                "public_send_stats": False,
+                "aliases": [],
+                "complete": False,
+                "dm_status_selected": True,
+                "overrides": ["bio"],
             },
         }
     ]

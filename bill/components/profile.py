@@ -97,6 +97,7 @@ PROFILE_WIZARD_BUTTON_ACTIONS = (
     "complete-links",
     "skip-links",
     "throne",
+    "confirm-throne",
     "skip-throne",
     "check-throne",
     "rotate",
@@ -279,6 +280,18 @@ def _colour_name(value: int | None) -> str:
     )
 
 
+def _effective_colour(draft: ProfileDraft) -> int | None:
+    if _is_linked(draft) and "profile_color" not in draft.document.overridden_fields:
+        return draft.resolved_profile_color
+    return draft.document.profile_color
+
+
+def _colour_choice_label(draft: ProfileDraft) -> str:
+    if _is_linked(draft) and "profile_color" not in draft.document.overridden_fields:
+        return f"Use global colour ({_colour_name(draft.resolved_profile_color)})"
+    return _colour_name(draft.document.profile_color)
+
+
 def _button(
     draft: ProfileDraft, label: str, action: str, style: discord.ButtonStyle
 ) -> discord.ui.Button:
@@ -310,7 +323,7 @@ def _review_preview(
     draft: ProfileDraft,
     presentation: MemberPresentation,
 ) -> discord.ui.Container:
-    color = draft.document.profile_color
+    color = _effective_colour(draft)
     container = discord.ui.Container(
         accent_color=None if color is None else discord.Color(color)
     )
@@ -504,7 +517,7 @@ def profile_wizard_view(
         container.add_item(
             discord.ui.TextDisplay(
                 "Choose the accent used on your published profile card. Setup stays neutral. "
-                f"Current choice: **{_colour_name(draft.document.profile_color)}**."
+                f"Current choice: **{_colour_choice_label(draft)}**."
             )
         )
         container.add_item(discord.ui.ActionRow(ProfileColorSelect(draft)))
@@ -571,10 +584,12 @@ def profile_wizard_view(
                 "paste and save the private URL Bill showed you, run **Test Webhook**, then "
                 "return here and press **Check Connection**."
             )
-        elif draft.wizard_substep == "confirm":
+        elif draft.throne_pending is not None:
             copy = (
-                "Confirm the resolved Throne handle shown below before Bill attaches it or "
-                "issues a private webhook."
+                "Bill found this Throne creator:\n\n"
+                f"> **@{safe_text(draft.throne_pending.handle, limit=80)}**\n\n"
+                "Confirm this is the profile you intended before Bill attaches it or issues a "
+                "private webhook."
             )
         else:
             copy = (
@@ -584,7 +599,19 @@ def profile_wizard_view(
         container.add_item(
             discord.ui.TextDisplay(copy)
         )
-        if connected:
+        if draft.throne_pending is not None and not connected:
+            controls = [
+                _button(
+                    draft,
+                    "Yes, connect this handle",
+                    "confirm-throne",
+                    discord.ButtonStyle.success,
+                ),
+                _button(draft, "Try another handle", "throne", discord.ButtonStyle.secondary),
+                _button(draft, "Skip for now", "skip-throne", discord.ButtonStyle.secondary),
+                _button(draft, "Back", "back", discord.ButtonStyle.secondary),
+            ]
+        elif connected:
             controls = [
                 _button(draft, "Check Connection", "check-throne", discord.ButtonStyle.primary),
                 _button(draft, "Rotate webhook", "rotate", discord.ButtonStyle.danger),
@@ -666,18 +693,27 @@ def profile_wizard_view(
         )
         container.add_item(discord.ui.ActionRow(DmStatusSelect(draft)))
         edits = [
-            _button(draft, "Edit orientation", "edit-orientation", discord.ButtonStyle.secondary),
             _button(draft, "Edit identity", "edit-pronouns", discord.ButtonStyle.secondary),
             _button(draft, "Edit DMs", "edit-dm", discord.ButtonStyle.secondary),
             _button(draft, "Edit bio", "edit-bio", discord.ButtonStyle.secondary),
             _button(draft, "Edit colour", "edit-color", discord.ButtonStyle.secondary),
         ]
+        if not _is_linked(draft):
+            edits.insert(
+                0,
+                _button(
+                    draft,
+                    "Edit orientation",
+                    "edit-orientation",
+                    discord.ButtonStyle.secondary,
+                ),
+            )
         container.add_item(discord.ui.ActionRow(*edits[:5]))
         more_edits = [
             _button(draft, "Edit titles", "edit-titles", discord.ButtonStyle.secondary),
             _button(draft, "Edit links", "edit-links", discord.ButtonStyle.secondary),
         ]
-        if _caps(draft.governing_orientation)[3]:
+        if _caps(draft.governing_orientation)[3] and not _is_linked(draft):
             more_edits.append(
                 _button(draft, "Edit Throne", "edit-throne", discord.ButtonStyle.secondary)
             )
@@ -720,6 +756,18 @@ def _adjacent_stage(
     return stages[max(0, min(len(stages) - 1, index + offset))]
 
 
+async def _send_ephemeral(
+    interaction: discord.Interaction[discord.Client],
+    content: str,
+    *,
+    view: discord.ui.View | None = None,
+) -> None:
+    if interaction.response.is_done():
+        await interaction.followup.send(content, view=view, ephemeral=True)
+    else:
+        await interaction.response.send_message(content, view=view, ephemeral=True)
+
+
 async def _move_wizard(
     bot: BillBot,
     interaction: discord.Interaction[discord.Client],
@@ -737,10 +785,7 @@ async def _move_wizard(
             substep=substep,
         )
     except WorkerAPIError as exc:
-        await interaction.response.send_message(
-            f"Bill could not move the profile wizard: {exc}",
-            ephemeral=True,
-        )
+        await _send_ephemeral(interaction, f"Bill could not move the profile wizard: {exc}")
         return None
 
 
@@ -769,16 +814,14 @@ async def _load_draft(
     revision: int,
 ) -> ProfileDraft | None:
     if str(interaction.user.id) != owner:
-        await interaction.response.send_message(
-            "That profile control belongs to someone else.", ephemeral=True
-        )
+        await _send_ephemeral(interaction, "That profile control belongs to someone else.")
         return None
     try:
         draft = await bot.require_worker().get_draft(draft_id, owner_user_id=interaction.user.id)
     except WorkerAPIError:
-        await interaction.response.send_message(
+        await _send_ephemeral(
+            interaction,
             "That profile control is no longer available. Please use `/profile` to resume it.",
-            ephemeral=True,
         )
         return None
     # DMs have no guild_id. Comparing the encoded guild with the durable draft
@@ -788,13 +831,13 @@ async def _load_draft(
         or draft.origin_guild_id != origin
         or (interaction.guild_id is not None and str(interaction.guild_id) != origin)
     ):
-        await interaction.response.send_message(
-            "That profile control belongs to a different profile session.", ephemeral=True
+        await _send_ephemeral(
+            interaction, "That profile control belongs to a different profile session."
         )
         return None
     if draft.revision != revision or draft.status.value != "active":
-        await interaction.response.send_message(
-            "That profile control is stale. Please use the latest wizard message.", ephemeral=True
+        await _send_ephemeral(
+            interaction, "That profile control is stale. Please use the latest wizard message."
         )
         return None
     return draft
@@ -1025,6 +1068,16 @@ class ProfileWizardDynamic(
 
     async def callback(self, interaction: discord.Interaction[discord.Client]) -> None:
         bot = cast("BillBot", interaction.client)
+        modal_actions = {
+            "bio",
+            "aliases",
+            "custom-color",
+            "link-social",
+            "link-payment",
+            "import",
+            "throne",
+        }
+        await interaction.response.defer()
         draft = await _load_draft(
             bot, interaction, self.draft_id, self.owner, self.guild, self.revision
         )
@@ -1033,11 +1086,11 @@ class ProfileWizardDynamic(
         message = interaction.message
         if self.action == "start":
             if message is None:
-                await interaction.response.send_message(
-                    "Please reopen your profile setup with `/profile`.", ephemeral=True
+                await _send_ephemeral(
+                    interaction, "Please reopen your profile setup with `/profile`."
                 )
                 return
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content=None,
                 view=_wizard_for(interaction, draft),
             )
@@ -1048,24 +1101,29 @@ class ProfileWizardDynamic(
                     draft.id, owner_user_id=interaction.user.id, expected_revision=draft.revision
                 )
             except WorkerAPIError as exc:
-                await interaction.response.send_message(
-                    f"Bill could not publish this profile: {exc}", ephemeral=True
+                await _send_ephemeral(
+                    interaction, f"Bill could not publish this profile: {exc}"
                 )
                 return
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 view=None, content="Your Bill profile is published."
             )
             return
         if self.action == "restart":
-            await interaction.response.send_message(
+            await _send_ephemeral(
+                interaction,
                 "Restart this private draft? This replaces unsaved progress.",
                 view=RestartConfirmView(draft),
-                ephemeral=True,
             )
             return
         if message is None:
-            await interaction.response.send_message(
-                "Please reopen your wizard with `/profile`.", ephemeral=True
+            await _send_ephemeral(interaction, "Please reopen your wizard with `/profile`.")
+            return
+        if self.action in modal_actions:
+            await _send_ephemeral(
+                interaction,
+                "Your editor is ready. Open it below.",
+                view=ProfileModalLauncherView(draft, message, self.action),
             )
             return
         if self.action in {"continue", "back"}:
@@ -1073,6 +1131,17 @@ class ProfileWizardDynamic(
                 if self.action == "continue":
                     _validate_continue(draft)
                 working = draft
+                if self.action == "continue" and _stage(draft) is WizardStage.THRONE:
+                    status = await bot.require_worker().get_throne_status(
+                        draft.id,
+                        owner_user_id=interaction.user.id,
+                        expected_revision=draft.revision,
+                    )
+                    if not status.verified:
+                        raise ValueError(
+                            "the Throne webhook was rotated or has not verified yet; "
+                            "run Test Webhook and check the connection again"
+                        )
                 if self.action == "continue" and _stage(draft) in {
                     WizardStage.PROFILE_COLOR,
                     WizardStage.DETAILS,
@@ -1108,12 +1177,9 @@ class ProfileWizardDynamic(
                     stage=target,
                 )
             except (ValueError, WorkerAPIError) as exc:
-                await interaction.response.send_message(
-                    f"Bill could not continue: {exc}",
-                    ephemeral=True,
-                )
+                await _send_ephemeral(interaction, f"Bill could not continue: {exc}")
                 return
-            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
+            await interaction.edit_original_response(view=_wizard_for(interaction, updated))
             return
         if self.action == "use-global":
             try:
@@ -1135,12 +1201,11 @@ class ProfileWizardDynamic(
                 else:
                     updated = saved
             except (ValueError, WorkerAPIError) as exc:
-                await interaction.response.send_message(
-                    f"Bill could not restore the global setting: {exc}",
-                    ephemeral=True,
+                await _send_ephemeral(
+                    interaction, f"Bill could not restore the global setting: {exc}"
                 )
                 return
-            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
+            await interaction.edit_original_response(view=_wizard_for(interaction, updated))
             return
         edit_stages = {
             "edit-orientation": WizardStage.ORIENTATION,
@@ -1166,16 +1231,7 @@ class ProfileWizardDynamic(
                 substep="review",
             )
             if updated is not None:
-                await interaction.response.edit_message(view=_wizard_for(interaction, updated))
-            return
-        if self.action == "bio":
-            await interaction.response.send_modal(BioModal(draft, message))
-            return
-        if self.action == "aliases":
-            await interaction.response.send_modal(AliasModal(draft, message))
-            return
-        if self.action == "custom-color":
-            await interaction.response.send_modal(ProfileColorModal(draft, message))
+                await interaction.edit_original_response(view=_wizard_for(interaction, updated))
             return
         if self.action == "skip-bio":
             updated = await _move_wizard(
@@ -1185,23 +1241,7 @@ class ProfileWizardDynamic(
                 _adjacent_stage(draft, forward=True),
             )
             if updated is not None:
-                await interaction.response.edit_message(view=_wizard_for(interaction, updated))
-            return
-        if self.action in {"link-social", "link-payment"}:
-            await interaction.response.send_modal(
-                LinkModal(
-                    draft,
-                    message,
-                    link_type=(
-                        LinkType.PAYMENT
-                        if self.action == "link-payment"
-                        else LinkType.SOCIAL
-                    ),
-                )
-            )
-            return
-        if self.action == "import":
-            await interaction.response.send_modal(LinkImportModal(draft, message))
+                await interaction.edit_original_response(view=_wizard_for(interaction, updated))
             return
         if self.action == "visibility":
             try:
@@ -1210,19 +1250,20 @@ class ProfileWizardDynamic(
                     user_id=interaction.user.id,
                 )
             except WorkerAPIError as exc:
-                await interaction.response.send_message(
-                    f"Bill could not load inherited links: {exc}", ephemeral=True
+                await _send_ephemeral(
+                    interaction, f"Bill could not load inherited links: {exc}"
                 )
                 return
             if lookup.profile is None or not lookup.profile.links:
-                await interaction.response.send_message(
-                    "Your global profile has no links to configure here.", ephemeral=True
+                await _send_ephemeral(
+                    interaction,
+                    "Your global profile has no links to configure here.",
                 )
                 return
-            await interaction.response.send_message(
+            await _send_ephemeral(
+                interaction,
                 "Choose global links to hide in this server.",
                 view=InheritedLinkVisibilityView(draft, lookup.profile.links, message),
-                ephemeral=True,
             )
             return
         if self.action in {"complete-links", "skip-links"}:
@@ -1241,14 +1282,50 @@ class ProfileWizardDynamic(
                     stage=_adjacent_stage(saved, forward=True),
                 )
             except WorkerAPIError as exc:
-                await interaction.response.send_message(
-                    f"Bill could not save links: {exc}", ephemeral=True
+                await _send_ephemeral(
+                    interaction, f"Bill could not save links: {exc}"
                 )
                 return
-            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
+            await interaction.edit_original_response(view=_wizard_for(interaction, updated))
             return
-        if self.action == "throne":
-            await interaction.response.send_modal(ThroneModal(draft, message))
+        if self.action == "confirm-throne":
+            try:
+                attached = await bot.require_worker().attach_throne(
+                    draft.id,
+                    owner_user_id=interaction.user.id,
+                    expected_revision=draft.revision,
+                    confirm_pending=True,
+                )
+                status = await bot.require_worker().get_throne_status(
+                    attached.draft.id,
+                    owner_user_id=interaction.user.id,
+                    expected_revision=attached.draft.revision,
+                )
+                updated = await bot.require_worker().set_draft_wizard_stage(
+                    attached.draft.id,
+                    owner_user_id=interaction.user.id,
+                    expected_revision=attached.draft.revision,
+                    stage=WizardStage.THRONE,
+                    substep="verified" if status.verified else "awaiting_verification",
+                )
+            except WorkerAPIError as exc:
+                await _send_ephemeral(
+                    interaction,
+                    f"Bill could not connect that Throne profile: {exc}",
+                )
+                return
+            await interaction.edit_original_response(view=_wizard_for(interaction, updated))
+            if attached.webhook_url:
+                await interaction.followup.send(
+                    _throne_webhook_instructions(attached.webhook_url),
+                    ephemeral=True,
+                )
+            elif status.verified:
+                await interaction.followup.send(
+                    f"**@{safe_text(status.handle or draft.throne_pending.handle, limit=80)}** "
+                    "is already connected and verified.",
+                    ephemeral=True,
+                )
             return
         if self.action == "skip-throne":
             try:
@@ -1269,11 +1346,11 @@ class ProfileWizardDynamic(
                     stage=_adjacent_stage(skipped, forward=True),
                 )
             except WorkerAPIError as exc:
-                await interaction.response.send_message(
-                    f"Bill could not skip Throne: {exc}", ephemeral=True
+                await _send_ephemeral(
+                    interaction, f"Bill could not skip Throne: {exc}"
                 )
                 return
-            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
+            await interaction.edit_original_response(view=_wizard_for(interaction, updated))
             return
         if self.action == "check-throne":
             try:
@@ -1283,11 +1360,11 @@ class ProfileWizardDynamic(
                     expected_revision=draft.revision,
                 )
                 if not status.verified:
-                    await interaction.response.send_message(
+                    await _send_ephemeral(
+                        interaction,
                         "Throne has not confirmed the connection yet. Check that you saved the "
                         "private webhook URL, run **Test Webhook** in Throne, then try "
                         "**Check Connection** again.",
-                        ephemeral=True,
                     )
                     return
                 updated = await bot.require_worker().set_draft_wizard_stage(
@@ -1298,12 +1375,12 @@ class ProfileWizardDynamic(
                     substep="verified",
                 )
             except WorkerAPIError as exc:
-                await interaction.response.send_message(
+                await _send_ephemeral(
+                    interaction,
                     f"Bill could not check the Throne connection: {exc}",
-                    ephemeral=True,
                 )
                 return
-            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
+            await interaction.edit_original_response(view=_wizard_for(interaction, updated))
             return
         if self.action == "rotate":
             try:
@@ -1318,19 +1395,19 @@ class ProfileWizardDynamic(
                     substep="awaiting_verification",
                 )
             except WorkerAPIError as exc:
-                await interaction.response.send_message(
-                    f"Bill could not rotate that webhook: {exc}", ephemeral=True
+                await _send_ephemeral(
+                    interaction, f"Bill could not rotate that webhook: {exc}"
                 )
                 return
-            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
+            await interaction.edit_original_response(view=_wizard_for(interaction, updated))
             if rotated.webhook_url:
                 await interaction.followup.send(
                     _throne_webhook_instructions(rotated.webhook_url),
                     ephemeral=True,
                 )
             return
-        await interaction.response.send_message(
-            "That action is no longer available. Use the latest wizard.", ephemeral=True
+        await _send_ephemeral(
+            interaction, "That action is no longer available. Use the latest wizard."
         )
 
 
@@ -1375,16 +1452,14 @@ class _ProfileSelectDynamic(
 
     async def callback(self, interaction: discord.Interaction[discord.Client]) -> None:
         bot = cast("BillBot", interaction.client)
+        await interaction.response.defer()
         draft = await _load_draft(
             bot, interaction, self.draft_id, self.owner, self.guild, self.revision
         )
         if draft is None:
             return
         if not self.item.values and self.action not in {"honourifics", "labels"}:
-            await interaction.response.send_message(
-                "Choose an option before continuing.",
-                ephemeral=True,
-            )
+            await _send_ephemeral(interaction, "Choose an option before continuing.")
             return
         if self.action == "orientation":
             try:
@@ -1402,11 +1477,11 @@ class _ProfileSelectDynamic(
                     stage=WizardStage.PRONOUNS,
                 )
             except (ValueError, WorkerAPIError) as exc:
-                await interaction.response.send_message(
-                    f"Bill could not save that orientation: {exc}", ephemeral=True
+                await _send_ephemeral(
+                    interaction, f"Bill could not save that orientation: {exc}"
                 )
                 return
-            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
+            await interaction.edit_original_response(view=_wizard_for(interaction, updated))
             return
         if self.action in {
             "pronouns",
@@ -1429,30 +1504,28 @@ class _ProfileSelectDynamic(
                     ),
                 )
             except (ValueError, WorkerAPIError) as exc:
-                await interaction.response.send_message(
+                await _send_ephemeral(
+                    interaction,
                     f"Bill could not save that identity selection: {exc}",
-                    ephemeral=True,
                 )
                 return
-            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
+            await interaction.edit_original_response(view=_wizard_for(interaction, updated))
             return
         message = interaction.message
         if message is None:
-            await interaction.response.send_message(
-                "Please reopen your wizard with `/profile`.", ephemeral=True
-            )
+            await _send_ephemeral(interaction, "Please reopen your wizard with `/profile`.")
             return
         if self.action == "link-select":
             link = next(
                 (item for item in draft.document.links if item.id == self.item.values[0]), None
             )
             if link is None:
-                await interaction.response.send_message(
-                    "That link no longer exists.", ephemeral=True
-                )
+                await _send_ephemeral(interaction, "That link no longer exists.")
                 return
-            await interaction.response.send_message(
-                "Manage this link.", view=LinkManagerView(draft, link.id, message), ephemeral=True
+            await _send_ephemeral(
+                interaction,
+                "Manage this link.",
+                view=LinkManagerView(draft, link.id, message),
             )
             return
         creator_id = self.item.values[0]
@@ -1463,26 +1536,33 @@ class _ProfileSelectDynamic(
                 expected_revision=draft.revision,
                 existing_creator_id=creator_id,
             )
-            updated = await bot.require_worker().update_draft_step(
+            status = await bot.require_worker().get_throne_status(
                 attached.draft.id,
-                step=DraftStepKey.THRONE,
                 owner_user_id=interaction.user.id,
                 expected_revision=attached.draft.revision,
-                values={
-                    "throne_creator_id": attached.draft.document.throne_creator_id,
-                    "preferred_payment_link_id": attached.draft.document.preferred_payment_link_id,
-                },
+            )
+            updated = await bot.require_worker().set_draft_wizard_stage(
+                attached.draft.id,
+                owner_user_id=interaction.user.id,
+                expected_revision=attached.draft.revision,
+                stage=WizardStage.THRONE,
+                substep="verified" if status.verified else "awaiting_verification",
             )
         except WorkerAPIError as exc:
-            await interaction.response.send_message(
-                f"Bill could not connect that creator: {exc}", ephemeral=True
+            await _send_ephemeral(
+                interaction, f"Bill could not connect that creator: {exc}"
             )
             return
-        await interaction.response.edit_message(view=_wizard_for(interaction, updated))
+        await interaction.edit_original_response(view=_wizard_for(interaction, updated))
         if attached.webhook_url:
             await interaction.followup.send(
-                "Your private Throne webhook URL (save it now):\n"
-                f"```text\n{attached.webhook_url}\n```",
+                _throne_webhook_instructions(attached.webhook_url),
+                ephemeral=True,
+            )
+        elif status.verified:
+            await interaction.followup.send(
+                f"**@{safe_text(status.handle or 'Throne creator', limit=80)}** is already "
+                "connected and verified. You can continue.",
                 ephemeral=True,
             )
 
@@ -1727,6 +1807,7 @@ class InheritedLinkVisibilityView(discord.ui.View):
         hidden_ids: tuple[str, ...],
     ) -> None:
         bot = cast("BillBot", interaction.client)
+        await interaction.response.defer()
         try:
             updated = await bot.require_worker().update_draft_step(
                 self.draft.id,
@@ -1739,13 +1820,13 @@ class InheritedLinkVisibilityView(discord.ui.View):
                 ),
             )
         except WorkerAPIError as exc:
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content=f"Bill could not save inherited visibility: {exc}",
                 view=None,
             )
             return
         await self.message.edit(view=_wizard_for(interaction, updated))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"Hidden {len(hidden_ids)} inherited link(s) in this server.",
             view=None,
         )
@@ -2028,36 +2109,81 @@ class ThroneModal(discord.ui.Modal, title="Connect Throne"):
         self.add_item(self.throne)
 
     async def on_submit(self, interaction: discord.Interaction[discord.Client]) -> None:
+        await interaction.response.defer(ephemeral=True)
         bot = cast("BillBot", interaction.client)
         try:
-            attached = await bot.require_worker().attach_throne(
+            resolved = await bot.require_worker().resolve_throne(
                 self.draft.id,
                 owner_user_id=interaction.user.id,
                 expected_revision=self.draft.revision,
                 throne_input=self.throne.value,
             )
-            updated = await bot.require_worker().update_draft_step(
-                attached.draft.id,
-                step=DraftStepKey.THRONE,
-                owner_user_id=interaction.user.id,
-                expected_revision=attached.draft.revision,
-                values={
-                    "throne_creator_id": attached.draft.document.throne_creator_id,
-                    "preferred_payment_link_id": attached.draft.document.preferred_payment_link_id,
-                },
-            )
         except WorkerAPIError as exc:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"Bill could not connect that Throne account: {exc}", ephemeral=True
             )
             return
-        await self.message.edit(view=_wizard_for(interaction, updated))
-        text = "Throne connected."
-        if attached.webhook_url:
-            text += (
-                f" Your private webhook URL (save it now):\n```text\n{attached.webhook_url}\n```"
-            )
-        await interaction.response.send_message(text, ephemeral=True)
+        await self.message.edit(view=_wizard_for(interaction, resolved.draft))
+        suffix = (
+            " It is already verified; confirm it to continue."
+            if resolved.already_verified
+            else " Confirm it before Bill creates the private connection."
+        )
+        await interaction.followup.send(
+            f"Found **@{safe_text(resolved.handle, limit=80)}**.{suffix}",
+            ephemeral=True,
+        )
+
+
+class ProfileModalLauncherView(discord.ui.View):
+    """Keeps modal defaults while acknowledging the Worker-backed draft reload first."""
+
+    def __init__(
+        self,
+        draft: ProfileDraft,
+        message: discord.Message,
+        action: str,
+    ) -> None:
+        super().__init__(timeout=180)
+        self.draft, self.message, self.action = draft, message, action
+        labels = {
+            "bio": "Open bio editor",
+            "aliases": "Open alias editor",
+            "custom-color": "Open colour editor",
+            "link-social": "Open social-link editor",
+            "link-payment": "Open payment-link editor",
+            "import": "Open import form",
+            "throne": "Open Throne form",
+        }
+        button = discord.ui.Button(label=labels[action], style=discord.ButtonStyle.primary)
+        button.callback = self.open_modal
+        self.add_item(button)
+
+    async def interaction_check(self, interaction: discord.Interaction[discord.Client]) -> bool:
+        if str(interaction.user.id) == self.draft.owner_user_id:
+            return True
+        await interaction.response.send_message(
+            "Only the profile owner can open this editor.", ephemeral=True
+        )
+        return False
+
+    async def open_modal(self, interaction: discord.Interaction[discord.Client]) -> None:
+        modal: discord.ui.Modal
+        if self.action == "bio":
+            modal = BioModal(self.draft, self.message)
+        elif self.action == "aliases":
+            modal = AliasModal(self.draft, self.message)
+        elif self.action == "custom-color":
+            modal = ProfileColorModal(self.draft, self.message)
+        elif self.action == "link-social":
+            modal = LinkModal(self.draft, self.message, link_type=LinkType.SOCIAL)
+        elif self.action == "link-payment":
+            modal = LinkModal(self.draft, self.message, link_type=LinkType.PAYMENT)
+        elif self.action == "import":
+            modal = LinkImportModal(self.draft, self.message)
+        else:
+            modal = ThroneModal(self.draft, self.message)
+        await interaction.response.send_modal(modal)
 
 
 class ImportConfirmView(discord.ui.View):
@@ -2081,6 +2207,7 @@ class ImportConfirmView(discord.ui.View):
         self, interaction: discord.Interaction[discord.Client], _: discord.ui.Button
     ) -> None:
         bot = cast("BillBot", interaction.client)
+        await interaction.response.defer()
         try:
             result = await bot.require_worker().confirm_link_import(
                 self.draft.id,
@@ -2090,11 +2217,11 @@ class ImportConfirmView(discord.ui.View):
                 candidate_ids=self.candidate_ids,
             )
         except WorkerAPIError as exc:
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content=f"Bill could not confirm these links: {exc}", view=None
             )
             return
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"Added {result.added_link_count} link(s).", view=None
         )
         await self.message.edit(view=_wizard_for(interaction, result.draft))
@@ -2132,6 +2259,7 @@ class LinkManagerView(discord.ui.View):
         self, interaction: discord.Interaction[discord.Client], _: discord.ui.Button
     ) -> None:
         bot = cast("BillBot", interaction.client)
+        await interaction.response.defer()
         try:
             updated = await bot.require_worker().delete_link(
                 self.draft.id,
@@ -2140,12 +2268,12 @@ class LinkManagerView(discord.ui.View):
                 expected_revision=self.draft.revision,
             )
         except WorkerAPIError as exc:
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content=f"Bill could not remove that link: {exc}", view=None
             )
             return
         await self.message.edit(view=_wizard_for(interaction, updated))
-        await interaction.response.edit_message(content="Link removed.", view=None)
+        await interaction.edit_original_response(content="Link removed.", view=None)
 
     @discord.ui.button(label="Prefer payment", style=discord.ButtonStyle.secondary)
     async def preferred(
@@ -2158,6 +2286,7 @@ class LinkManagerView(discord.ui.View):
             )
             return
         bot = cast("BillBot", interaction.client)
+        await interaction.response.defer()
         try:
             updated = await bot.require_worker().edit_link(
                 self.draft.id,
@@ -2173,12 +2302,12 @@ class LinkManagerView(discord.ui.View):
                 preferred=True,
             )
         except WorkerAPIError as exc:
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content=f"Bill could not prefer that link: {exc}", view=None
             )
             return
         await self.message.edit(view=_wizard_for(interaction, updated))
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content="Preferred payment link updated.", view=None
         )
 
@@ -2193,6 +2322,7 @@ class RestartConfirmView(discord.ui.View):
         self, interaction: discord.Interaction[discord.Client], _: discord.ui.Button
     ) -> None:
         bot = cast("BillBot", interaction.client)
+        await interaction.response.defer()
         try:
             draft = await bot.require_worker().restart_draft(
                 self.draft.id,
@@ -2200,11 +2330,11 @@ class RestartConfirmView(discord.ui.View):
                 expected_revision=self.draft.revision,
             )
         except WorkerAPIError as exc:
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content=f"Bill could not restart this draft: {exc}", view=None
             )
             return
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content="Draft restarted. Use `/profile` to reopen its private wizard.", view=None
         )
         try:

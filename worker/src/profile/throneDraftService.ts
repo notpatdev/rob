@@ -213,7 +213,8 @@ export async function resolveThroneForDraft(env: Env, input: ResolveThroneInput)
       `UPDATE profile_drafts
           SET pending_throne_token_hash = ?, pending_throne_public_creator_id = ?,
               pending_throne_handle = ?, pending_throne_profile_url = ?,
-              pending_throne_expires_at = ?, revision = ?, updated_at = ?
+              pending_throne_expires_at = ?, wizard_stage = 'throne',
+              wizard_substep = 'confirm', revision = ?, updated_at = ?
         WHERE id = ? AND revision = ? AND status = 'active'`,
     ).bind(
       tokenHash,
@@ -276,6 +277,10 @@ export interface AttachThroneInput {
   /** The capability returned by `resolveThroneForDraft`: confirms the exact handle the owner was
    * shown, with no creator id ever leaving the Worker. */
   readonly confirmationToken: string | null;
+  /** Confirms the currently staged identity using the bearer-authenticated, owner/revision-bound
+   * draft capability. This is the restart-safe wizard path: the plaintext one-time token is not
+   * persisted or embedded in Discord custom IDs. */
+  readonly confirmPending?: boolean;
   readonly rotateWebhook: boolean;
 }
 
@@ -302,13 +307,16 @@ export async function attachThroneToDraft(env: Env, input: AttachThroneInput): P
   );
   requireThroneCapableDraft(draft, governingOrientation);
 
-  const supplied = [input.throneInput, input.existingCreatorId, input.confirmationToken].filter(
-    (value) => value !== null,
-  );
+  const supplied = [
+    input.throneInput,
+    input.existingCreatorId,
+    input.confirmationToken,
+    input.confirmPending ? "pending" : null,
+  ].filter((value) => value !== null);
   if (supplied.length !== 1) {
     badRequest(
       "throne_input_required",
-      "exactly one of confirmation_token, throne_input, or existing_creator_id is required",
+      "exactly one Throne confirmation or attachment input is required",
     );
   }
 
@@ -319,8 +327,11 @@ export async function attachThroneToDraft(env: Env, input: AttachThroneInput): P
   let clearPendingThrone = false;
   const mutationGuard = draftMutationGuard(draft);
 
-  if (input.confirmationToken !== null) {
-    const identity = await consumePendingIdentity(draft, input.confirmationToken);
+  if (input.confirmationToken !== null || input.confirmPending) {
+    const identity =
+      input.confirmationToken !== null
+        ? await consumePendingIdentity(draft, input.confirmationToken)
+        : pendingIdentityForOwnedDraft(draft);
     let prepared;
     try {
       // The staged identity, not a fresh network lookup, is what gets attached: the
@@ -332,6 +343,20 @@ export async function attachThroneToDraft(env: Env, input: AttachThroneInput): P
     } catch (error) {
       if (error instanceof ThroneResolutionError) failThroneResolution(error);
       throw error;
+    }
+
+    function pendingIdentityForOwnedDraft(draft: DraftRow): ResolvedThroneIdentity {
+      const publicCreatorId = draft.pending_throne_public_creator_id;
+      const handle = draft.pending_throne_handle;
+      const profileUrl = draft.pending_throne_profile_url;
+      if (publicCreatorId === null || handle === null || profileUrl === null) {
+        badRequest("pending_throne_required", "this draft has no Throne connection awaiting confirmation");
+      }
+      const expiresAt = draft.pending_throne_expires_at;
+      if (expiresAt !== null && Date.parse(expiresAt) <= Date.now()) {
+        badRequest("throne_confirmation_expired", "that Throne confirmation expired; resolve the handle again");
+      }
+      return { publicCreatorId, handle, profileUrl };
     }
     creatorId = prepared.creatorId;
     webhookUrl = prepared.webhookUrl;
@@ -353,7 +378,7 @@ export async function attachThroneToDraft(env: Env, input: AttachThroneInput): P
       creatorStatements = [
         env.DB.prepare(
           `UPDATE throne_creators
-              SET route_secret_hash = ?, updated_at = ?
+               SET route_secret_hash = ?, webhook_verified_at = NULL, updated_at = ?
             WHERE id = ? AND owner_discord_user_id = ? AND ${mutationGuard.sql}`,
         ).bind(
           rotated.routeSecretHash,
@@ -416,7 +441,7 @@ export async function rotateDraftThroneWebhook(env: Env, input: RotateThroneInpu
   const mutationGuard = draftMutationGuard(draft);
   const rotateStatement = env.DB.prepare(
     `UPDATE throne_creators
-        SET route_secret_hash = ?, updated_at = ?
+        SET route_secret_hash = ?, webhook_verified_at = NULL, updated_at = ?
       WHERE id = ? AND owner_discord_user_id = ? AND ${mutationGuard.sql}`,
   ).bind(
     rotated.routeSecretHash,

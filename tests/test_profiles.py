@@ -22,6 +22,7 @@ from bill.components.profile import (
     MemberPresentation,
     ProfileColorModal,
     ProfileColorSelect,
+    ProfileModalLauncherView,
     ProfileSelectDynamic,
     ProfileWizardDynamic,
     StatsSelect,
@@ -50,6 +51,7 @@ from bill.worker_client import (
     PublicProfile,
     SendStat,
     ServerProfileMode,
+    ThronePending,
     WizardStage,
     WorkerClient,
 )
@@ -490,6 +492,25 @@ def test_review_exposes_revision_bound_dm_status_editor_alongside_identity_modal
     assert len(edit_buttons) == 1
 
 
+def test_throne_confirmation_screen_survives_restart_without_secret_material() -> None:
+    state = replace(
+        draft(next_step=DraftStepKey.THRONE),
+        current_step=DraftStepKey.THRONE,
+        governing_orientation=Orientation.DOMME,
+        wizard_stage=WizardStage.THRONE,
+        wizard_substep="confirm",
+        throne_pending=ThronePending("resolvedqueen", "2026-08-23T12:00:00Z"),
+    )
+
+    encoded = str(profile_wizard_view(state).to_components())
+
+    assert "@resolvedqueen" in encoded
+    assert "Yes, connect this handle" in encoded
+    assert "Try another handle" in encoded
+    assert "confirmation_token" not in encoded
+    assert "/t/" not in encoded
+
+
 def test_profile_intro_start_control_is_persistent_and_disjoint() -> None:
     view = profile_intro_view(draft())
     button = view.children[0]
@@ -518,6 +539,10 @@ async def test_profile_start_reloads_draft_after_restart_before_rendering() -> N
         def __init__(self) -> None:
             self.content: str | None = "unchanged"
             self.view: discord.ui.LayoutView | None = None
+            self.deferred = False
+
+        async def defer(self) -> None:
+            self.deferred = True
 
         async def edit_message(
             self,
@@ -534,6 +559,7 @@ async def test_profile_start_reloads_draft_after_restart_before_rendering() -> N
         guild_id=None,
         message=object(),
         response=response,
+        edit_original_response=response.edit_message,
     )
     item = discord.ui.Button(
         label="Start",
@@ -544,9 +570,77 @@ async def test_profile_start_reloads_draft_after_restart_before_rendering() -> N
     await dynamic.callback(interaction)  # type: ignore[arg-type]
 
     assert loaded == [("draft_1", 1)]
+    assert response.deferred
     assert response.content is None
     assert response.view is not None
     assert "-# Bill Profile Setup" in str(response.view.to_components())
+
+
+@pytest.mark.asyncio
+async def test_modal_actions_acknowledge_before_loading_and_preserve_defaults() -> None:
+    state = replace(
+        identity_draft(),
+        wizard_stage=WizardStage.BIO,
+        document=replace(identity_draft().document, bio="Saved bio"),
+    )
+    events: list[str] = []
+    launcher: ProfileModalLauncherView | None = None
+
+    class Worker:
+        async def get_draft(self, draft_id: str, *, owner_user_id: int) -> ProfileDraft:
+            assert (draft_id, owner_user_id) == (state.id, 1)
+            assert events == ["defer"]
+            events.append("load")
+            return state
+
+    class Bot:
+        def require_worker(self) -> Worker:
+            return Worker()
+
+    class DynamicResponse:
+        async def defer(self) -> None:
+            events.append("defer")
+
+        def is_done(self) -> bool:
+            return True
+
+    class Followup:
+        async def send(
+            self,
+            _content: str,
+            *,
+            view: discord.ui.View | None,
+            ephemeral: bool,
+        ) -> None:
+            nonlocal launcher
+            assert ephemeral
+            assert isinstance(view, ProfileModalLauncherView)
+            launcher = view
+
+    interaction = SimpleNamespace(
+        client=Bot(),
+        user=SimpleNamespace(id=1),
+        guild_id=None,
+        message=object(),
+        response=DynamicResponse(),
+        followup=Followup(),
+    )
+    item = discord.ui.Button(label="Edit bio", custom_id=wizard_custom_id(state, "bio"))
+    dynamic = ProfileWizardDynamic(item, state.id, "1", state.origin_guild_id, 3, "bio")
+
+    await dynamic.callback(interaction)  # type: ignore[arg-type]
+
+    assert events == ["defer", "load"]
+    assert launcher is not None
+
+    class ModalResponse:
+        async def send_modal(self, modal: discord.ui.Modal) -> None:
+            assert isinstance(modal, BioModal)
+            assert modal.bio.default == "Saved bio"
+
+    await launcher.open_modal(  # type: ignore[arg-type]
+        SimpleNamespace(response=ModalResponse())
+    )
 
 
 @pytest.mark.parametrize(
@@ -733,14 +827,19 @@ async def test_dm_status_select_persists_revision_bound_partial_mutation() -> No
             return Worker()
 
     class SelectResponse:
+        async def defer(self) -> None:
+            return None
+
         async def edit_message(self, *, view: discord.ui.LayoutView) -> None:
             assert "Closed" in str(view.to_components())
 
+    response = SelectResponse()
     interaction = SimpleNamespace(
         client=Bot(),
         user=SimpleNamespace(id=1, display_name="Display Name", display_avatar=None),
         guild_id=None,
-        response=SelectResponse(),
+        response=response,
+        edit_original_response=response.edit_message,
     )
     item = discord.ui.Select(
         custom_id=wizard_custom_id(state, "dm-status"),
@@ -871,7 +970,28 @@ async def test_dm_status_select_rejects_stale_revision_before_mutation() -> None
             return Worker()
 
     class StaleResponse:
+        def __init__(self) -> None:
+            self.deferred = False
+
+        async def defer(self) -> None:
+            self.deferred = True
+
+        def is_done(self) -> bool:
+            return self.deferred
+
         async def send_message(self, content: str, *, ephemeral: bool) -> None:
+            assert ephemeral
+            messages.append(content)
+
+    class Followup:
+        async def send(
+            self,
+            content: str,
+            *,
+            view: discord.ui.View | None = None,
+            ephemeral: bool,
+        ) -> None:
+            assert view is None
             assert ephemeral
             messages.append(content)
 
@@ -880,6 +1000,7 @@ async def test_dm_status_select_rejects_stale_revision_before_mutation() -> None
         user=SimpleNamespace(id=1),
         guild_id=None,
         response=StaleResponse(),
+        followup=Followup(),
     )
     item = discord.ui.Select(
         custom_id=wizard_custom_id(state, "dm-status"),
@@ -1116,6 +1237,22 @@ def test_linked_colour_distinguishes_inherit_explicit_clear_and_override() -> No
     assert [option.value for option in inherited.options if option.default] == ["inherit"]
     assert [option.value for option in cleared.options if option.default] == ["none"]
     assert [option.value for option in blue.options if option.default] == ["5865f2"]
+
+
+def test_linked_review_uses_resolved_global_colour_and_hides_inapplicable_edits() -> None:
+    linked = replace(
+        identity_draft(scope=DraftScope.SERVER, mode=ServerProfileMode.LINKED),
+        wizard_stage=WizardStage.REVIEW,
+        resolved_profile_color=0xE0568A,
+    )
+
+    view = profile_wizard_view(linked, presentation=MemberPresentation("Member"))
+    encoded = str(view.to_components())
+    containers = [item for item in view.children if isinstance(item, discord.ui.Container)]
+
+    assert containers[-1].accent_color == discord.Color(0xE0568A)
+    assert "Edit orientation" not in encoded
+    assert "Edit Throne" not in encoded
 
 
 def test_free_text_is_confined_to_focused_modals() -> None:

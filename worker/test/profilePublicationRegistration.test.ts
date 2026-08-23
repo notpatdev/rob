@@ -20,6 +20,9 @@ async function seedCompletedDraft(options: {
     throneCreatorId: options.creatorId,
   });
   const now = new Date().toISOString();
+  await env.DB.prepare("UPDATE throne_creators SET webhook_verified_at = ? WHERE id = ?")
+    .bind(now, options.creatorId)
+    .run();
   await env.DB.prepare(
     `INSERT INTO profile_drafts
        (id, owner_user_id, origin_guild_id, target_scope, document_id, base_version,

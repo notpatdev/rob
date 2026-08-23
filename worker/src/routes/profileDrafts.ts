@@ -82,6 +82,11 @@ function serializeDraftContract(draft: DraftContract) {
           },
     wizard_stage: draft.wizardStage,
     wizard_substep: draft.wizardSubstep,
+    throne_pending:
+      draft.thronePending === null
+        ? null
+        : { handle: draft.thronePending.handle, expires_at: draft.thronePending.expiresAt },
+    resolved_profile_color: draft.resolvedProfileColor,
     created_at: draft.createdAt,
     updated_at: draft.updatedAt,
     published_at: draft.publishedAt,

@@ -93,6 +93,21 @@ export async function publishDraft(env: Env, input: PublishDraftInput): Promise<
   if (governingOrientation === null) {
     badRequest("orientation_required", "orientation must be chosen before publishing");
   }
+  if (governingCreatorId !== null) {
+    const verifiedCreator = await env.DB.prepare(
+      `SELECT id
+         FROM throne_creators
+        WHERE id = ? AND owner_discord_user_id = ? AND webhook_verified_at IS NOT NULL`,
+    )
+      .bind(governingCreatorId, draft.owner_user_id)
+      .first();
+    if (verifiedCreator === null) {
+      badRequest(
+        "throne_webhook_unverified",
+        "the connected Throne creator must pass Test Webhook before this profile can be published",
+      );
+    }
+  }
 
   const requiredSteps = stepsForDraft(draft.target_scope, draft.server_mode, governingOrientation).filter(
     (step): step is Exclude<StepKey, "review"> => step !== "review",
@@ -143,6 +158,15 @@ export async function publishDraft(env: Env, input: PublishDraftInput): Promise<
     );
   }
   const legacyGuard = legacyRegistrationConflictGuard(registrationProjections);
+  const throneVerificationGuardSql =
+    governingCreatorId === null
+      ? "1 = 1"
+      : `EXISTS (
+           SELECT 1 FROM throne_creators
+            WHERE id = ? AND owner_discord_user_id = ? AND webhook_verified_at IS NOT NULL
+         )`;
+  const throneVerificationGuardParams =
+    governingCreatorId === null ? [] : [governingCreatorId, draft.owner_user_id];
 
   const now = nowIso();
   const isGlobal = draft.target_scope === "global";
@@ -237,7 +261,8 @@ export async function publishDraft(env: Env, input: PublishDraftInput): Promise<
          (SELECT document_id
             FROM profile_drafts
            WHERE id = ? AND revision = ? AND status = 'published'
-             AND document_id = ? AND ${baseRootGuardSql} AND ${legacyGuard.sql}),
+             AND document_id = ? AND ${baseRootGuardSql} AND ${legacyGuard.sql}
+             AND ${throneVerificationGuardSql}),
          ?
        )`,
     ).bind(
@@ -251,6 +276,7 @@ export async function publishDraft(env: Env, input: PublishDraftInput): Promise<
       newDocumentId,
       ...baseRootGuardParams,
       ...legacyGuard.params,
+      ...throneVerificationGuardParams,
       now,
     ),
     rootUpsertStatement,

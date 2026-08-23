@@ -167,6 +167,9 @@ export interface DraftContract {
    * Throne id, and never the confirmation token itself -- only what the owner is being asked
    * to say yes to. Null once confirmed, expired-and-replaced, or never resolved. */
   readonly thronePending: { handle: string; expiresAt: string | null } | null;
+  /** Effective colour the profile would publish with right now. For linked
+   * drafts this includes the live global value when no local override exists. */
+  readonly resolvedProfileColor: number | null;
   readonly document: {
     dmStatus: DocumentSnapshot["dmStatus"];
     bio: string | null;
@@ -288,6 +291,15 @@ function resolveWizardStage(
 export async function buildContract(env: Env, draft: DraftRow): Promise<DraftContract> {
   const snapshot = (await readDocumentSnapshot(env, draft.document_id)) ?? EMPTY_SNAPSHOT;
   const governingOrientation = await resolveGoverningOrientation(env, draft, snapshot);
+  let resolvedProfileColor = snapshot.profileColor;
+  if (linkedDraft(draft) && !snapshot.overriddenFields.includes("profile_color")) {
+    const globalRoot = await env.DB.prepare("SELECT current_document_id FROM global_profiles WHERE owner_user_id = ?")
+      .bind(draft.owner_user_id)
+      .first<{ current_document_id: string }>();
+    const globalDocument =
+      globalRoot === null ? null : await readDocumentSnapshot(env, globalRoot.current_document_id);
+    resolvedProfileColor = globalDocument?.profileColor ?? null;
+  }
   const steps = stepsForDraft(draft.target_scope, draft.server_mode, governingOrientation);
   const statuses = await loadStepStatuses(env, draft.id);
   const dmStatusSelected =
@@ -327,6 +339,7 @@ export async function buildContract(env: Env, draft: DraftRow): Promise<DraftCon
       draft.pending_throne_token_hash === null || draft.pending_throne_handle === null
         ? null
         : { handle: draft.pending_throne_handle, expiresAt: draft.pending_throne_expires_at },
+    resolvedProfileColor,
     document: {
       dmStatus: snapshot.dmStatus,
       bio: snapshot.bio,
@@ -607,10 +620,20 @@ async function computeNewSnapshot(
   if (stepKey === "throne") {
     const parsed = parseThroneStep(body, governingOrientation);
     if (parsed.throneCreatorId !== null) {
-      const owned = await env.DB.prepare("SELECT id FROM throne_creators WHERE id = ? AND owner_discord_user_id = ?")
+      const owned = await env.DB.prepare(
+        `SELECT id, webhook_verified_at
+           FROM throne_creators
+          WHERE id = ? AND owner_discord_user_id = ?`,
+      )
         .bind(parsed.throneCreatorId, draft.owner_user_id)
-        .first();
+        .first<{ id: string; webhook_verified_at: string | null }>();
       if (owned === null) badRequest("throne_creator_not_owned", "that Throne creator is not owned by this user");
+      if (owned.webhook_verified_at === null) {
+        badRequest(
+          "throne_webhook_unverified",
+          "run Throne's Test Webhook and check the connection before completing this step",
+        );
+      }
     }
     if (parsed.preferredPaymentLinkId !== null) {
       if (!current.links.some((link) => link.id === parsed.preferredPaymentLinkId && link.linkType === "payment")) {

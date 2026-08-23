@@ -126,6 +126,11 @@ describe("POST /v1/guilds/:guildId/registrations/domme", () => {
       ),
     );
     const firstBody = await readJson<{ data: { webhook_url: string | null } }>(first);
+    await env.DB.prepare(
+      "UPDATE throne_creators SET webhook_verified_at = ? WHERE public_creator_id = ?",
+    )
+      .bind("2026-08-23T12:00:00Z", "creator-carol")
+      .run();
 
     mockResolve("creator-carol", "carol");
     const second = await callWorker(
@@ -141,6 +146,13 @@ describe("POST /v1/guilds/:guildId/registrations/domme", () => {
     expect(secondBody.data.webhook_state).toBe("rotated");
     expect(secondBody.data.webhook_url).not.toBeNull();
     expect(secondBody.data.webhook_url).not.toBe(firstBody.data.webhook_url);
+    expect(
+      await env.DB.prepare(
+        "SELECT webhook_verified_at FROM throne_creators WHERE public_creator_id = ?",
+      )
+        .bind("creator-carol")
+        .first(),
+    ).toEqual({ webhook_verified_at: null });
   });
 
   it("rejects linking an already-owned creator to a different Discord user", async () => {

@@ -171,6 +171,11 @@ describe("0004 migration additive safety", () => {
       ...draftColumnsBefore.results.map((row) => row.name),
       "wizard_stage",
       "wizard_substep",
+      "pending_throne_token_hash",
+      "pending_throne_public_creator_id",
+      "pending_throne_handle",
+      "pending_throne_profile_url",
+      "pending_throne_expires_at",
     ]);
 
     expect(await env.DB.prepare("SELECT * FROM profile_documents WHERE id = ?").bind("doc-pre0004-published").first())
@@ -181,6 +186,11 @@ describe("0004 migration additive safety", () => {
       ...(draftBefore as object),
       wizard_stage: null,
       wizard_substep: null,
+      pending_throne_token_hash: null,
+      pending_throne_public_creator_id: null,
+      pending_throne_handle: null,
+      pending_throne_profile_url: null,
+      pending_throne_expires_at: null,
     });
     expect(await env.DB.prepare("SELECT * FROM profile_links WHERE id = ?").bind("link-pre0004").first()).toEqual(
       linkBefore,

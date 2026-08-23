@@ -20,6 +20,7 @@ const TEAL = 0x2aa198;
 interface DraftBody {
   id: string;
   revision: number;
+  resolved_profile_color: number | null;
   document: { profile_color: number | null; overridden_fields: string[] };
 }
 interface DraftEnvelope {
@@ -412,6 +413,7 @@ describe("profile_color on a linked server draft", () => {
       guild_id: OTHER_GUILD,
       server_mode: "linked",
     });
+    expect(draft.resolved_profile_color).toBe(ROSE);
 
     const overridden = await putStep(draft.id, "identity", {
       owner_user_id: owner,
@@ -423,6 +425,7 @@ describe("profile_color on a linked server draft", () => {
     expect(overridden.status).toBe(200);
     expect(overridden.draft?.document.profile_color).toBe(TEAL);
     expect(overridden.draft?.document.overridden_fields).toContain("profile_color");
+    expect(overridden.draft?.resolved_profile_color).toBe(TEAL);
 
     const explicitNone = await putStep(draft.id, "identity", {
       owner_user_id: owner,
@@ -443,6 +446,7 @@ describe("profile_color on a linked server draft", () => {
     });
     expect(inherited.draft?.document.overridden_fields).not.toContain("profile_color");
     expect(inherited.draft?.document.profile_color).toBeNull();
+    expect(inherited.draft?.resolved_profile_color).toBe(ROSE);
   });
 
   it("publishes a linked overlay whose overridden colour beats the inherited one", async () => {

@@ -205,6 +205,12 @@ class ThronePrefill:
 
 
 @dataclass(frozen=True, slots=True)
+class ThronePending:
+    handle: str
+    expires_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class ProfileDraft:
     id: str
     owner_user_id: str
@@ -227,6 +233,8 @@ class ProfileDraft:
     dm_status_selected: bool = False
     wizard_stage: WizardStage | None = None
     wizard_substep: str | None = None
+    throne_pending: ThronePending | None = None
+    resolved_profile_color: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,6 +284,13 @@ class ThroneDraftResult:
     draft: ProfileDraft
     webhook_url: str | None
     webhook_state: str
+
+
+@dataclass(frozen=True, slots=True)
+class ThroneResolveResult:
+    draft: ProfileDraft
+    handle: str
+    already_verified: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -647,6 +662,7 @@ class WorkerClient:
         expected_revision: int,
         throne_input: str | None = None,
         existing_creator_id: str | None = None,
+        confirm_pending: bool = False,
         rotate_webhook: bool = False,
     ) -> ThroneDraftResult:
         data = await self._request(
@@ -658,6 +674,7 @@ class WorkerClient:
                 {
                     "throne_input": throne_input,
                     "existing_creator_id": existing_creator_id,
+                    "confirm_pending": confirm_pending,
                     "rotate_webhook": rotate_webhook,
                 },
             ),
@@ -666,6 +683,31 @@ class WorkerClient:
             await self.get_draft(draft_id, owner_user_id=owner_user_id),
             _optional_string(data.get("webhook_url")),
             _string(data.get("webhook_state"), "webhook_state"),
+        )
+
+    async def resolve_throne(
+        self,
+        draft_id: str,
+        *,
+        owner_user_id: int | str,
+        expected_revision: int,
+        throne_input: str,
+    ) -> ThroneResolveResult:
+        data = await self._request(
+            "POST",
+            f"/v1/profile-drafts/{draft_id}/throne/resolve",
+            json=self._mutation(
+                owner_user_id,
+                expected_revision,
+                {"throne_input": throne_input},
+            ),
+        )
+        handle = _string(data.get("handle"), "Throne handle")
+        already_verified = _bool(data.get("already_verified"), "already_verified")
+        return ThroneResolveResult(
+            await self.get_draft(draft_id, owner_user_id=owner_user_id),
+            handle,
+            already_verified,
         )
 
     async def rotate_throne(
@@ -894,6 +936,14 @@ class WorkerClient:
         document = _record(data.get("document"), "draft document")
         prefill = data.get("throne_prefill")
         parsed_prefill = None if prefill is None else WorkerClient._parse_prefill(prefill)
+        pending = data.get("throne_pending")
+        parsed_pending = None
+        if pending is not None:
+            pending_data = _record(pending, "pending Throne confirmation")
+            parsed_pending = ThronePending(
+                _string(pending_data.get("handle"), "pending Throne handle"),
+                _optional_string(pending_data.get("expires_at")),
+            )
         current = data.get("current_step")
         next_step = data.get("next_step")
         governing = data.get("governing_orientation")
@@ -938,6 +988,8 @@ class WorkerClient:
             _bool(data.get("dm_status_selected"), "dm_status_selected"),
             _nullable_enum(WizardStage, data.get("wizard_stage"), "wizard_stage"),
             _optional_string(data.get("wizard_substep")),
+            parsed_pending,
+            _optional_color(data.get("resolved_profile_color"), "resolved_profile_color"),
         )
 
     @staticmethod

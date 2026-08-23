@@ -35,6 +35,7 @@ function serializeDraftContract(draft: DraftContract) {
       draft.thronePending === null
         ? null
         : { handle: draft.thronePending.handle, expires_at: draft.thronePending.expiresAt },
+    resolved_profile_color: draft.resolvedProfileColor,
     wizard_stage: draft.wizardStage,
     wizard_substep: draft.wizardSubstep,
     updated_at: draft.updatedAt,
@@ -138,6 +139,7 @@ export async function handleAttachDraftThrone(ctx: RouteContext): Promise<Respon
   const throneInputRaw = body!.throne_input;
   const existingCreatorIdRaw = body!.existing_creator_id;
   const confirmationTokenRaw = body!.confirmation_token;
+  const confirmPendingRaw = body!.confirm_pending;
   if (throneInputRaw !== undefined && throneInputRaw !== null && typeof throneInputRaw !== "string") {
     return Errors.badRequest("throne_input must be a string or null", "invalid_field");
   }
@@ -151,6 +153,9 @@ export async function handleAttachDraftThrone(ctx: RouteContext): Promise<Respon
   ) {
     return Errors.badRequest("confirmation_token must be a non-empty string or null", "invalid_field");
   }
+  if (confirmPendingRaw !== undefined && typeof confirmPendingRaw !== "boolean") {
+    return Errors.badRequest("confirm_pending must be a boolean", "invalid_field");
+  }
   const rotateWebhook = body!.rotate_webhook === true;
 
   const result = await runThroneOperation(() =>
@@ -161,6 +166,7 @@ export async function handleAttachDraftThrone(ctx: RouteContext): Promise<Respon
       throneInput: (throneInputRaw as string | undefined) ?? null,
       existingCreatorId: (existingCreatorIdRaw as string | undefined) ?? null,
       confirmationToken: (confirmationTokenRaw as string | undefined) ?? null,
+      confirmPending: confirmPendingRaw === true,
       rotateWebhook,
     }),
   );

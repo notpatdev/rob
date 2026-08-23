@@ -218,7 +218,8 @@ export function buildPreparedCreatorStatements(
     return [
       env.DB.prepare(
         `UPDATE throne_creators
-            SET handle = ?, profile_url = ?, route_secret_hash = ?, updated_at = ?
+           SET handle = ?, profile_url = ?, route_secret_hash = ?,
+               webhook_verified_at = NULL, updated_at = ?
           WHERE id = ? AND owner_discord_user_id = ?${guardSuffix}`,
       ).bind(
         prepared.handle,
@@ -283,7 +284,7 @@ export async function prepareWebhookSecret(
 export async function rotateThroneWebhookSecret(env: Env, creatorId: string): Promise<{ webhookUrl: string }> {
   const prepared = await prepareWebhookSecret(env, creatorId);
   const result = await env.DB.prepare(
-    "UPDATE throne_creators SET route_secret_hash = ?, updated_at = ? WHERE id = ?",
+    "UPDATE throne_creators SET route_secret_hash = ?, webhook_verified_at = NULL, updated_at = ? WHERE id = ?",
   )
     .bind(prepared.routeSecretHash, nowIso(), creatorId)
     .run();

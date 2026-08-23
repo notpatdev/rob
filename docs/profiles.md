@@ -24,8 +24,14 @@ member never start setup.
 
 Drafts are private D1 records. Each mutation carries the last observed revision;
 stale, foreign-user, wrong-guild, and completed controls fail safely.
-Fixed identity selections and the DM-status menu are persisted without
-completing the identity step, so a restart can reconstruct partial progress.
+The wizard edits one Components V2 message in place and durably stores its exact
+stage and substep before rerendering. The guided order is orientation, pronouns,
+conditional titles/labels, DM status, bio, profile colour, links, conditional
+Throne and/or aliases/stats, then review. Conditional stages change the displayed
+`Step X of Y` total. Back, Continue, resume, and review edits therefore reconstruct
+the same screen after a restart instead of inferring progress from Discord.
+Fixed selections are persisted without prematurely completing their logical
+profile section.
 Global and independent profiles must deliberately choose Open, By Request,
 After Tribute, or Closed before saving identity. A linked server profile may
 instead choose **Use global setting**, which removes its server-specific DM
@@ -42,6 +48,21 @@ bio, and social links. Dom/me and switch profiles also support payment links and
 Throne. Submissive and switch profiles support up to three aliases and the
 public send-stat preference. Switch profiles support both honourifics and
 submissive labels.
+
+Published profile cards may use Bill's documented Blue, Purple, Rose, Red,
+Orange, Gold, Emerald, or Teal presets, a strict six-digit custom RGB hex value,
+or no colour. Setup containers remain neutral. A linked server profile inherits
+the global colour unless the member explicitly selects a local colour or
+deliberately clears it to **No colour**.
+
+Throne connection is a verified flow rather than a success-shaped attachment.
+Bill resolves the submitted profile, asks the member to confirm the handle, and
+then issues or reuses the private webhook. The owner sees a numbered set of
+generic Throne navigation instructions and the URL once. **Check Connection**
+queries the Worker for `webhook_verified_at`; an unverified test remains on the
+same screen with troubleshooting, while a verified test unlocks Continue. An
+already-owned verified creator can continue without rotating its secret, and
+Skip remains available.
 
 ## Links and privacy
 

@@ -99,7 +99,7 @@ def setup_view(
 ) -> discord.ui.LayoutView:
     presentation = presentation or GuildPresentation("This server", "Server administrator")
     view = discord.ui.LayoutView(timeout=None)
-    container = discord.ui.Container(accent_color=discord.Color.blurple())
+    container = discord.ui.Container()
     container.add_item(discord.ui.TextDisplay("-# Bill Server Setup"))
     title = f"### {_escape(presentation.guild_name)}"
     current_step = (
@@ -129,16 +129,20 @@ def setup_view(
         container.add_item(
             discord.ui.TextDisplay(
                 f"> **Posting channel:** <#{session.selected_channel_id}>\n"
-                "> Bill is ready to post new Throne sends for this server."
+                "> Bill is ready to post new Throne sends for this server. Confirming setup "
+                "does not change any other server settings."
             )
         )
     elif session.selected_channel_id:
         container.add_item(
             discord.ui.TextDisplay(
                 f"> **Selected channel:** <#{session.selected_channel_id}>\n"
-                "> Confirm to make this the public destination for new Throne sends."
+                "> Confirm to save this as the public destination for new Throne sends. Bill "
+                "must be able to view the channel, send messages, embed links, and read message "
+                "history."
             )
         )
+        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
         container.add_item(
             discord.ui.ActionRow(
                 discord.ui.Button(
@@ -152,7 +156,8 @@ def setup_view(
         container.add_item(
             discord.ui.TextDisplay(
                 "Choose the public text channel where Bill should post new Throne sends. "
-                "You can review the choice before confirming."
+                "Bill needs **View Channel**, **Send Messages**, **Embed Links**, and "
+                "**Read Message History** there. You can review the choice before confirming."
             )
         )
         container.add_item(

@@ -43,6 +43,10 @@ export interface DocumentSnapshot {
   readonly overriddenFields: readonly OverridableField[];
   /** Only meaningful on a linked overlay document; ids of inherited global links this overlay hides. */
   readonly hiddenInheritedLinkIds: readonly string[];
+  /** The document's optional accent colour (0x000000-0xFFFFFF), or `null` for "no colour" -- a
+   * deliberate, valid choice on its own, not merely unset (see migration 0004). On a linked
+   * overlay this is only meaningful when `overriddenFields` includes `"profile_color"`. */
+  readonly profileColor: number | null;
 }
 
 export const EMPTY_SNAPSHOT: DocumentSnapshot = {
@@ -57,6 +61,7 @@ export const EMPTY_SNAPSHOT: DocumentSnapshot = {
   links: [],
   overriddenFields: [],
   hiddenInheritedLinkIds: [],
+  profileColor: null,
 };
 
 interface DocumentScalarRow {
@@ -66,11 +71,12 @@ interface DocumentScalarRow {
   public_send_stats: number;
   throne_creator_id: string | null;
   preferred_payment_link_id: string | null;
+  profile_color: number | null;
 }
 
 export async function readDocumentSnapshot(env: Env, documentId: string): Promise<DocumentSnapshot | null> {
   const doc = await env.DB.prepare(
-    `SELECT orientation, dm_status, bio, public_send_stats, throne_creator_id, preferred_payment_link_id
+    `SELECT orientation, dm_status, bio, public_send_stats, throne_creator_id, preferred_payment_link_id, profile_color
        FROM profile_documents WHERE id = ?`,
   )
     .bind(documentId)
@@ -133,6 +139,7 @@ export async function readDocumentSnapshot(env: Env, documentId: string): Promis
     })),
     overriddenFields: overrideResult.results.map((row) => row.field_name) as OverridableField[],
     hiddenInheritedLinkIds: visibilityResult.results.map((row) => row.inherited_link_id),
+    profileColor: doc.profile_color,
   };
 }
 
@@ -195,8 +202,8 @@ export function buildDocumentWriteStatements(
       env.DB.prepare(
         `INSERT INTO profile_documents
            (id, owner_user_id, state, orientation, dm_status, bio, public_send_stats,
-            throne_creator_id, preferred_payment_link_id, created_at, updated_at)
-         VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)`,
+            throne_creator_id, preferred_payment_link_id, profile_color, created_at, updated_at)
+         VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
         documentId,
         ownerUserId,
@@ -206,6 +213,7 @@ export function buildDocumentWriteStatements(
         snapshot.publicSendStats ? 1 : 0,
         snapshot.throneCreatorId,
         snapshot.preferredPaymentLinkId,
+        snapshot.profileColor,
         now,
         now,
       ),
@@ -215,7 +223,7 @@ export function buildDocumentWriteStatements(
       env.DB.prepare(
         `UPDATE profile_documents
            SET orientation = ?, dm_status = ?, bio = ?, public_send_stats = ?,
-               throne_creator_id = ?, preferred_payment_link_id = ?, updated_at = ?
+               throne_creator_id = ?, preferred_payment_link_id = ?, profile_color = ?, updated_at = ?
          WHERE id = ?${guardFragment.sql}`,
       ).bind(
         snapshot.orientation,
@@ -224,6 +232,7 @@ export function buildDocumentWriteStatements(
         snapshot.publicSendStats ? 1 : 0,
         snapshot.throneCreatorId,
         snapshot.preferredPaymentLinkId,
+        snapshot.profileColor,
         now,
         documentId,
         ...guardFragment.params,

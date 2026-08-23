@@ -55,6 +55,7 @@ describe("profile Throne mutations", () => {
         expectedRevision: draft.revision,
         throneInput: null,
         existingCreatorId: creator.id,
+        confirmationToken: null,
         rotateWebhook: true,
       }),
       attachThroneToDraft(env, {
@@ -63,6 +64,7 @@ describe("profile Throne mutations", () => {
         expectedRevision: draft.revision,
         throneInput: null,
         existingCreatorId: creator.id,
+        confirmationToken: null,
         rotateWebhook: true,
       }),
     ]);

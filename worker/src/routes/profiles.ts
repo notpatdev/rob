@@ -29,6 +29,7 @@ function serializeProfile(profile: ResolvedProfile) {
       sort_order: link.sortOrder,
     })),
     preferred_payment_link_id: profile.preferredPaymentLinkId,
+    profile_color: profile.profileColor,
     throne_connected: profile.throneConnected,
     send_stats:
       profile.sendStats === null

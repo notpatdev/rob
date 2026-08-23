@@ -21,19 +21,24 @@ import { newId, nowIso } from "../util/id.js";
 import { isSnowflake } from "../util/snowflake.js";
 import {
   ValidationError,
+  WIZARD_STAGES,
+  isWizardStage,
   parseIdentityStep,
   parseLinkStep,
   parseLinkedIdentityStep,
   parseLinkedLinksStep,
   parseOrientationStep,
   parseThroneStep,
+  parseWizardStageUpdate,
   stepsForDraft,
+  wizardStagesForDraft,
   ORIENTATION_CAPABILITIES,
   LIMITS,
   type Orientation,
   type ServerMode,
   type StepKey,
   type TargetScope,
+  type WizardStage,
 } from "./contracts.js";
 import {
   EMPTY_SNAPSHOT,
@@ -76,6 +81,18 @@ export interface DraftRow {
   status: "active" | "published";
   current_step: StepKey;
   revision: number;
+  /** NULL on every draft that predates migration 0004, and on any draft whose owner has not
+   * navigated since; `buildContract` derives a resume position rather than exposing the NULL. */
+  wizard_stage: string | null;
+  wizard_substep: string | null;
+  /** Staged, not-yet-confirmed Throne identity (see migration 0004 and `throneDraftService`).
+   * Only the confirmation capability's hash is stored; nothing exists in `throne_creators`
+   * and no webhook secret has been minted while these are set. */
+  pending_throne_token_hash: string | null;
+  pending_throne_public_creator_id: string | null;
+  pending_throne_handle: string | null;
+  pending_throne_profile_url: string | null;
+  pending_throne_expires_at: string | null;
   created_at: string;
   updated_at: string;
   published_at: string | null;
@@ -95,6 +112,12 @@ interface StepStatusRow {
   completed_at: string | null;
 }
 
+/** A `linked` server overlay inherits orientation/Throne from the owner's global document, which
+ * changes both its step sequence and its wizard stage sequence. */
+function linkedDraft(draft: DraftRow): boolean {
+  return draft.target_scope === "server" && draft.server_mode === "linked";
+}
+
 async function loadStepStatuses(env: Env, draftId: string): Promise<Map<string, StepStatusRow>> {
   const { results } = await env.DB.prepare(
     "SELECT step_key, status, completed_at FROM profile_draft_steps WHERE draft_id = ?",
@@ -106,7 +129,7 @@ async function loadStepStatuses(env: Env, draftId: string): Promise<Map<string, 
 
 /** The orientation that governs a draft's capabilities: its own for global/independent, or the live global owner's for a linked overlay. */
 export async function resolveGoverningOrientation(env: Env, draft: DraftRow, ownDocument: DocumentSnapshot): Promise<Orientation | null> {
-  if (!(draft.target_scope === "server" && draft.server_mode === "linked")) {
+  if (!linkedDraft(draft)) {
     return ownDocument.orientation;
   }
   const globalRoot = await env.DB.prepare("SELECT current_document_id FROM global_profiles WHERE owner_user_id = ?")
@@ -132,6 +155,18 @@ export interface DraftContract {
   readonly steps: { key: StepKey; status: "pending" | "completed"; completedAt: string | null }[];
   readonly dmStatusSelected: boolean;
   readonly governingOrientation: Orientation | null;
+  /** The wizard screen this draft should resume on. Never null, even for a draft whose stored
+   * bookmark is still NULL (pre-0004 rows, or a draft nobody has navigated yet): see
+   * `deriveWizardStage`. Always one of `wizardStagesForDraft` for this draft. */
+  readonly wizardStage: WizardStage;
+  /** A free-form marker scoped to `wizardStage` only (e.g. Throne verification state, or the
+   * "came here from review" return marker); null unless the last navigation named one. */
+  readonly wizardSubstep: string | null;
+  /** A Throne handle this draft has resolved but whose owner has not confirmed yet, so the
+   * confirmation screen survives a bot restart. Deliberately carries no creator id, no public
+   * Throne id, and never the confirmation token itself -- only what the owner is being asked
+   * to say yes to. Null once confirmed, expired-and-replaced, or never resolved. */
+  readonly thronePending: { handle: string; expiresAt: string | null } | null;
   readonly document: {
     dmStatus: DocumentSnapshot["dmStatus"];
     bio: string | null;
@@ -143,6 +178,7 @@ export interface DraftContract {
     hiddenInheritedLinkIds: readonly string[];
     throneCreatorId: string | null;
     preferredPaymentLinkId: string | null;
+    profileColor: number | null;
   };
   /** Only present when the governing orientation has the Throne capability; lets the wizard
    * offer "reuse your existing Throne creator" / "this guild already has a registration"
@@ -201,6 +237,54 @@ async function loadThronePrefill(
   return { ownedCreators, existingRegistrationCreatorId };
 }
 
+/**
+ * The coarse step a stage belongs to, used only to translate a step-based
+ * resume position into a stage-based one.
+ */
+const STAGE_FOR_STEP: Readonly<Record<StepKey, WizardStage>> = {
+  orientation: "orientation",
+  identity: "pronouns",
+  links: "links",
+  throne: "throne",
+  review: "review",
+};
+
+/**
+ * The screen a draft resumes on.
+ *
+ * A stored bookmark wins whenever it is still part of this draft's stage
+ * sequence. Otherwise -- a draft created before migration 0004 added the
+ * columns, a draft nobody has navigated since, or a bookmark the owner
+ * invalidated by changing orientation (say, `throne` after switching to
+ * `submissive`) -- the position is *derived*, deterministically, from the
+ * draft's own progress: the first still-pending step, else the last step it
+ * touched, mapped to that step's first stage and then clamped backwards to
+ * the nearest applicable stage. Deriving rather than persisting a guess is
+ * what lets 0004 stay purely additive while old active drafts still resume
+ * exactly where their coarse `current_step` left them.
+ */
+export function deriveWizardStage(
+  stages: readonly WizardStage[],
+  nextStep: StepKey | null,
+  currentStep: StepKey,
+): WizardStage {
+  const target = STAGE_FOR_STEP[nextStep ?? currentStep] ?? "review";
+  if (stages.includes(target)) return target;
+  const targetIndex = WIZARD_STAGES.indexOf(target);
+  const applicable = stages.filter((stage) => WIZARD_STAGES.indexOf(stage) <= targetIndex);
+  return applicable.at(-1) ?? (stages[0] as WizardStage);
+}
+
+function resolveWizardStage(
+  draft: DraftRow,
+  stages: readonly WizardStage[],
+  nextStep: StepKey | null,
+): WizardStage {
+  const stored = draft.wizard_stage;
+  if (isWizardStage(stored) && stages.includes(stored)) return stored;
+  return deriveWizardStage(stages, nextStep, draft.current_step);
+}
+
 export async function buildContract(env: Env, draft: DraftRow): Promise<DraftContract> {
   const snapshot = (await readDocumentSnapshot(env, draft.document_id)) ?? EMPTY_SNAPSHOT;
   const governingOrientation = await resolveGoverningOrientation(env, draft, snapshot);
@@ -220,6 +304,7 @@ export async function buildContract(env: Env, draft: DraftRow): Promise<DraftCon
   });
   const nextStep = stepList.find((step) => step.status === "pending")?.key ?? null;
   const thronePrefill = await loadThronePrefill(env, draft, governingOrientation);
+  const stages = wizardStagesForDraft(draft.target_scope, draft.server_mode, governingOrientation);
 
   return {
     id: draft.id,
@@ -236,6 +321,12 @@ export async function buildContract(env: Env, draft: DraftRow): Promise<DraftCon
     steps: stepList,
     dmStatusSelected,
     governingOrientation,
+    wizardStage: resolveWizardStage(draft, stages, nextStep),
+    wizardSubstep: draft.wizard_substep,
+    thronePending:
+      draft.pending_throne_token_hash === null || draft.pending_throne_handle === null
+        ? null
+        : { handle: draft.pending_throne_handle, expiresAt: draft.pending_throne_expires_at },
     document: {
       dmStatus: snapshot.dmStatus,
       bio: snapshot.bio,
@@ -247,6 +338,7 @@ export async function buildContract(env: Env, draft: DraftRow): Promise<DraftCon
       hiddenInheritedLinkIds: snapshot.hiddenInheritedLinkIds,
       throneCreatorId: snapshot.throneCreatorId,
       preferredPaymentLinkId: snapshot.preferredPaymentLinkId,
+      profileColor: snapshot.profileColor,
     },
     thronePrefill,
     createdAt: draft.created_at,
@@ -442,7 +534,7 @@ async function computeNewSnapshot(
   completeStep: boolean,
   dmStatusSelected: boolean,
 ): Promise<DocumentSnapshot> {
-  const linked = draft.target_scope === "server" && draft.server_mode === "linked";
+  const linked = linkedDraft(draft);
 
   if (stepKey === "orientation") {
     if (linked) badRequest("step_not_applicable", "a linked server profile inherits orientation from the global profile");
@@ -469,6 +561,11 @@ async function computeNewSnapshot(
         },
         aliases: parsed.aliases,
         overriddenFields: Array.from(parsed.overriddenFields),
+        // On an overlay the column alone cannot express "inherit": it is the
+        // `profile_color` override row (persisted from `overriddenFields`) that
+        // distinguishes an inherited colour from a deliberately cleared one, so a
+        // non-overriding body always stores NULL here (see resolver.ts).
+        profileColor: parsed.profileColor,
       };
     }
     const parsed = parseIdentityStep(
@@ -483,6 +580,7 @@ async function computeNewSnapshot(
       publicSendStats: parsed.publicSendStats,
       selections: { pronouns: parsed.pronouns, honourifics: parsed.honourifics, submissiveLabels: parsed.submissiveLabels },
       aliases: parsed.aliases,
+      profileColor: parsed.profileColor,
     };
   }
 
@@ -618,6 +716,28 @@ export async function applyDraftStep(env: Env, input: ApplyStepInput): Promise<D
     throw error;
   }
 
+  // A step mutation may *optionally* carry a bookmark update, so a caller that
+  // knows where it is sending the owner next can persist both in the one
+  // guarded batch instead of a second round trip. Omitting either key leaves
+  // that column untouched (unlike the dedicated wizard-stage endpoint, where an
+  // omitted substep clears it).
+  let bookmark: { wizardStage: WizardStage | null | undefined; wizardSubstep: string | null | undefined };
+  try {
+    bookmark = parseWizardStageUpdate(bodyRecord ?? {});
+  } catch (error) {
+    if (error instanceof ValidationError) badRequest(error.code, error.message);
+    throw error;
+  }
+  if (bookmark.wizardStage !== undefined && bookmark.wizardStage !== null) {
+    // Validate against the sequence this draft will have *after* the mutation:
+    // completing the orientation step is exactly when the sequence changes.
+    const orientationAfter = linkedDraft(draft) ? governingOrientation : newSnapshot.orientation;
+    const stagesAfter = wizardStagesForDraft(draft.target_scope, draft.server_mode, orientationAfter);
+    if (!stagesAfter.includes(bookmark.wizardStage)) {
+      badRequest("stage_not_applicable", `${bookmark.wizardStage} is not part of this draft's wizard sequence`);
+    }
+  }
+
   const now = nowIso();
   const newRevision = draft.revision + 1;
   const guard = { draftId: draft.id, expectedRevision: draft.revision };
@@ -644,13 +764,23 @@ export async function applyDraftStep(env: Env, input: ApplyStepInput): Promise<D
        ON CONFLICT (draft_id, step_key) DO UPDATE SET status = 'completed', completed_at = excluded.completed_at`,
     ).bind(draft.id, input.stepKey, now, draft.id, draft.revision));
   }
+  const bookmarkAssignments: string[] = [];
+  const bookmarkParams: unknown[] = [];
+  if (bookmark.wizardStage !== undefined) {
+    bookmarkAssignments.push("wizard_stage = ?");
+    bookmarkParams.push(bookmark.wizardStage);
+  }
+  if (bookmark.wizardSubstep !== undefined) {
+    bookmarkAssignments.push("wizard_substep = ?");
+    bookmarkParams.push(bookmark.wizardSubstep);
+  }
   statements.push(
     env.DB.prepare(
       `UPDATE profile_drafts
-          SET revision = ?, current_step = ?, updated_at = ?
+          SET revision = ?, current_step = ?, updated_at = ?${bookmarkAssignments.length > 0 ? `, ${bookmarkAssignments.join(", ")}` : ""}
         WHERE id = ? AND revision = ? AND status = 'active'
           AND EXISTS (SELECT 1 FROM profile_documents WHERE id = ? AND state = 'draft')`,
-    ).bind(newRevision, input.stepKey, now, draft.id, draft.revision, draft.document_id),
+    ).bind(newRevision, input.stepKey, now, ...bookmarkParams, draft.id, draft.revision, draft.document_id),
   );
 
   const results = await env.DB.batch(statements);
@@ -697,13 +827,73 @@ export async function restartDraft(env: Env, input: RestartDraftInput): Promise<
     ...buildDocumentWriteStatements(env, draft.document_id, draft.owner_user_id, snapshot, now, { isNew: false, guard }),
     env.DB.prepare(
       `UPDATE profile_drafts
-          SET revision = ?, current_step = 'orientation', base_version = ?, updated_at = ?
+          SET revision = ?, current_step = 'orientation', base_version = ?, updated_at = ?,
+              wizard_stage = NULL, wizard_substep = NULL,
+              pending_throne_token_hash = NULL, pending_throne_public_creator_id = NULL,
+              pending_throne_handle = NULL, pending_throne_profile_url = NULL,
+              pending_throne_expires_at = NULL
         WHERE id = ? AND revision = ? AND status = 'active'
           AND EXISTS (SELECT 1 FROM profile_documents WHERE id = ? AND state = 'draft')`,
     ).bind(newRevision, baseVersion, now, draft.id, draft.revision, draft.document_id),
   ];
 
   const results = await env.DB.batch(statements);
+  const guardResult = results.at(-1);
+  if (guardResult === undefined || guardResult.meta.changes === 0) {
+    conflict("stale_revision", "expected_revision does not match the draft's current revision");
+  }
+
+  const updated = await loadOwnedDraft(env, draft.id, draft.owner_user_id);
+  return buildContract(env, updated);
+}
+
+// --- wizard stage bookmark ---------------------------------------------------------------------
+
+export interface SetWizardStageInput {
+  readonly draftId: string;
+  readonly ownerUserId: string;
+  readonly expectedRevision: number;
+  readonly stage: WizardStage;
+  /** Always explicit: the route normalizes an omitted `substep` to `null` (see
+   * `parseWizardStageRequest`), so navigating without naming one always clears it. */
+  readonly substep: string | null;
+}
+
+/**
+ * Records where the private wizard is, durably, before the bot rerenders
+ * its message.
+ *
+ * This is a full first-class mutation, not a side note: it is
+ * ownership-checked, requires the draft to still be active, compare-and-swaps
+ * on `expected_revision`, and bumps the revision like every other draft
+ * mutation, so a duplicate click or a second device replaying an old
+ * navigation loses cleanly with `stale_revision` instead of dragging the
+ * winner's wizard backwards. A zero-row UPDATE is not an error in SQLite, so
+ * the CAS is verified through `meta.changes` rather than assumed.
+ */
+export async function setDraftWizardStage(env: Env, input: SetWizardStageInput): Promise<DraftContract> {
+  const draft = await loadOwnedDraft(env, input.draftId, input.ownerUserId);
+  if (draft.status !== "active") conflict("draft_not_active", "this draft has already been published or restarted");
+  if (draft.revision !== input.expectedRevision) {
+    conflict("stale_revision", "expected_revision does not match the draft's current revision");
+  }
+
+  const snapshot = (await readDocumentSnapshot(env, draft.document_id)) ?? EMPTY_SNAPSHOT;
+  const governingOrientation = await resolveGoverningOrientation(env, draft, snapshot);
+  const stages = wizardStagesForDraft(draft.target_scope, draft.server_mode, governingOrientation);
+  if (!stages.includes(input.stage)) {
+    badRequest("stage_not_applicable", `${input.stage} is not part of this draft's wizard sequence`);
+  }
+
+  const now = nowIso();
+  const newRevision = draft.revision + 1;
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE profile_drafts
+          SET wizard_stage = ?, wizard_substep = ?, revision = ?, updated_at = ?
+        WHERE id = ? AND revision = ? AND status = 'active'`,
+    ).bind(input.stage, input.substep, newRevision, now, draft.id, draft.revision),
+  ]);
   const guardResult = results.at(-1);
   if (guardResult === undefined || guardResult.meta.changes === 0) {
     conflict("stale_revision", "expected_revision does not match the draft's current revision");

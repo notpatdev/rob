@@ -2,12 +2,19 @@ import type { RouteContext } from "../router.js";
 import { Errors, fail, ok } from "../util/response.js";
 import { isSnowflake } from "../util/snowflake.js";
 import { HomeGuildNotConfiguredError } from "../env.js";
-import { STEP_KEYS, type StepKey } from "../profile/contracts.js";
+import {
+  STEP_KEYS,
+  ValidationError,
+  parseWizardStageRequest,
+  type StepKey,
+  type WizardStageRequest,
+} from "../profile/contracts.js";
 import {
   DraftError,
   applyDraftStep,
   getDraftContract,
   restartDraft,
+  setDraftWizardStage,
   startDraft,
   type DraftContract,
 } from "../profile/draftService.js";
@@ -64,6 +71,7 @@ function serializeDraftContract(draft: DraftContract) {
       hidden_inherited_link_ids: draft.document.hiddenInheritedLinkIds,
       throne_creator_id: draft.document.throneCreatorId,
       preferred_payment_link_id: draft.document.preferredPaymentLinkId,
+      profile_color: draft.document.profileColor,
     },
     throne_prefill:
       draft.thronePrefill === null
@@ -72,6 +80,8 @@ function serializeDraftContract(draft: DraftContract) {
             owned_creators: draft.thronePrefill.ownedCreators.map((creator) => ({ id: creator.id, handle: creator.handle })),
             existing_registration_creator_id: draft.thronePrefill.existingRegistrationCreatorId,
           },
+    wizard_stage: draft.wizardStage,
+    wizard_substep: draft.wizardSubstep,
     created_at: draft.createdAt,
     updated_at: draft.updatedAt,
     published_at: draft.publishedAt,
@@ -103,6 +113,7 @@ function serializeResolvedProfile(profile: ResolvedProfile) {
       sort_order: link.sortOrder,
     })),
     preferred_payment_link_id: profile.preferredPaymentLinkId,
+    profile_color: profile.profileColor,
     throne_connected: profile.throneConnected,
     send_stats:
       profile.sendStats === null
@@ -217,6 +228,41 @@ function parseDraftMutationBody(body: Record<string, unknown> | null): DraftMuta
     return Errors.badRequest("expected_revision must be a non-negative integer", "invalid_expected_revision");
   }
   return { ownerUserId, expectedRevision };
+}
+
+/**
+ * `PUT /v1/profile-drafts/:draftId/wizard-stage` -- durably record which
+ * wizard screen the owner is on before the bot rerenders its message, so a
+ * message rebuilt after a restart (or opened on a second device) resumes on
+ * the same micro-screen. Body: the usual `owner_user_id`/`expected_revision`
+ * mutation envelope plus `stage`, and an optional `substep` whose omission
+ * deliberately clears any previous substep.
+ */
+export async function handleSetDraftWizardStage(ctx: RouteContext): Promise<Response> {
+  const draftId = ctx.params.draftId ?? "";
+  const body = await readJsonBody(ctx.request);
+  const parsed = parseDraftMutationBody(body);
+  if (parsed instanceof Response) return parsed;
+
+  let request: WizardStageRequest;
+  try {
+    request = parseWizardStageRequest(body as Record<string, unknown>);
+  } catch (error) {
+    if (error instanceof ValidationError) return Errors.badRequest(error.message, error.code);
+    throw error;
+  }
+
+  const result = await runDraftOperation(() =>
+    setDraftWizardStage(ctx.env, {
+      draftId,
+      ownerUserId: parsed.ownerUserId,
+      expectedRevision: parsed.expectedRevision,
+      stage: request.stage,
+      substep: request.substep,
+    }),
+  );
+  if (!result.ok) return result.response;
+  return ok({ draft: serializeDraftContract(result.value) });
 }
 
 export async function handleRestartDraft(ctx: RouteContext): Promise<Response> {

@@ -12,11 +12,17 @@ import {
   handlePublishDraft,
   handlePutDraftStep,
   handleRestartDraft,
+  handleSetDraftWizardStage,
   handleStartDraft,
 } from "./routes/profileDrafts.js";
 import { handleAddLink, handleDeleteLink, handleEditLink } from "./routes/profileLinks.js";
 import { handleConfirmLinkImport, handleCreateLinkImport } from "./routes/profileLinkImports.js";
-import { handleAttachDraftThrone, handleRotateDraftThrone } from "./routes/profileThrone.js";
+import {
+  handleAttachDraftThrone,
+  handleGetDraftThroneStatus,
+  handleResolveDraftThrone,
+  handleRotateDraftThrone,
+} from "./routes/profileThrone.js";
 import {
   handleCompleteGuildSetupSession,
   handleCreateGuildSetupSession,
@@ -55,6 +61,7 @@ router.get("/v1/guilds/:guildId/profiles/:userId", withAuth(handleGetProfile));
 router.post("/v1/profile-drafts/start", withAuth(handleStartDraft));
 router.get("/v1/profile-drafts/:draftId", withAuth(handleGetDraft));
 router.put("/v1/profile-drafts/:draftId/steps/:stepKey", withAuth(handlePutDraftStep));
+router.put("/v1/profile-drafts/:draftId/wizard-stage", withAuth(handleSetDraftWizardStage));
 router.post("/v1/profile-drafts/:draftId/restart", withAuth(handleRestartDraft));
 router.post("/v1/profile-drafts/:draftId/publish", withAuth(handlePublishDraft));
 router.post("/v1/profile-drafts/:draftId/link-imports", withAuth(handleCreateLinkImport));
@@ -62,8 +69,10 @@ router.post("/v1/profile-drafts/:draftId/link-imports/:importId/confirm", withAu
 router.post("/v1/profile-drafts/:draftId/links", withAuth(handleAddLink));
 router.put("/v1/profile-drafts/:draftId/links/:linkId", withAuth(handleEditLink));
 router.delete("/v1/profile-drafts/:draftId/links/:linkId", withAuth(handleDeleteLink));
+router.post("/v1/profile-drafts/:draftId/throne/resolve", withAuth(handleResolveDraftThrone));
 router.post("/v1/profile-drafts/:draftId/throne", withAuth(handleAttachDraftThrone));
 router.post("/v1/profile-drafts/:draftId/throne/rotate", withAuth(handleRotateDraftThrone));
+router.get("/v1/profile-drafts/:draftId/throne/status", withAuth(handleGetDraftThroneStatus));
 router.post("/v1/guild-setup-sessions", withAuth(handleCreateGuildSetupSession));
 router.get("/v1/guild-setup-sessions/:sessionId", withAuth(handleGetGuildSetupSession));
 router.put("/v1/guild-setup-sessions/:sessionId/channel", withAuth(handleSetGuildSetupChannel));

@@ -12,18 +12,24 @@ import pytest
 from bill.components.profile import (
     DM_STATUS_OPTIONS,
     ORIENTATION_LABELS,
+    PROFILE_COLOR_OPTIONS,
     PROFILE_WIZARD_BUTTON_ACTIONS,
     PROFILE_WIZARD_SELECT_ACTIONS,
+    AliasModal,
+    BioModal,
     DmStatusSelect,
-    IdentityModal,
+    LinkModal,
     MemberPresentation,
+    ProfileColorModal,
+    ProfileColorSelect,
     ProfileSelectDynamic,
     ProfileWizardDynamic,
-    _identity_values,
+    StatsSelect,
     _partial_identity_values,
     profile_intro_view,
     profile_wizard_view,
     wizard_custom_id,
+    wizard_stages,
 )
 from bill.components.public_profile import profile_links_view, public_profile_view
 from bill.components.setup import GuildPresentation, setup_custom_id, setup_view
@@ -44,6 +50,7 @@ from bill.worker_client import (
     PublicProfile,
     SendStat,
     ServerProfileMode,
+    WizardStage,
     WorkerClient,
 )
 
@@ -142,14 +149,10 @@ def _all_items(view: discord.ui.LayoutView) -> list[discord.ui.Item[Any]]:
 
 
 def _rows(view: discord.ui.LayoutView) -> list[discord.ui.ActionRow[Any]]:
-    return [
-        item
-        for item in _all_items(view)
-        if isinstance(item, discord.ui.ActionRow)
-    ]
+    return [item for item in _all_items(view) if isinstance(item, discord.ui.ActionRow)]
 
 
-def _profile(*, empty: bool = False) -> PublicProfile:
+def _profile(*, empty: bool = False, profile_color: int | None = None) -> PublicProfile:
     return PublicProfile(
         DraftScope.GLOBAL,
         None,
@@ -189,6 +192,7 @@ def _profile(*, empty: bool = False) -> PublicProfile:
         None if empty else (SendStat("USD", 2, 1234), SendStat("EUR", 1, 500)),
         1,
         None,
+        profile_color,
     )
 
 
@@ -228,6 +232,7 @@ async def test_profile_lookup_is_parsed_into_frozen_contracts() -> None:
                 "send_stats": None,
                 "version": 4,
                 "published_at": "2026-01-01T00:00:00Z",
+                "profile_color": 0x5865F2,
             },
         },
     }
@@ -238,6 +243,7 @@ async def test_profile_lookup_is_parsed_into_frozen_contracts() -> None:
 
     assert lookup.profile is not None
     assert lookup.profile.orientation is Orientation.DOMME
+    assert lookup.profile.profile_color == 0x5865F2
     assert lookup.profile.links[0].link_type is LinkType.PAYMENT
     assert session.last_kwargs["headers"]["Authorization"] == "Bearer secret"
 
@@ -293,9 +299,7 @@ def test_orientation_wizard_uses_v2_container_and_all_four_options() -> None:
     assert len(ORIENTATION_LABELS) == 4
     encoded = str(view.to_components())
     assert "-# Bill Profile Setup" in encoded
-    sections = [
-        item for item in _all_items(view) if isinstance(item, discord.ui.Section)
-    ]
+    sections = [item for item in _all_items(view) if isinstance(item, discord.ui.Section)]
     assert len(sections) == 1
     assert isinstance(sections[0].accessory, discord.ui.Thumbnail)
     assert "bill:p:rdraft_1:1:2:3:orientation" in encoded
@@ -324,9 +328,7 @@ def test_public_profile_escapes_bio_and_exposes_only_safe_link_controls() -> Non
     assert "Aliases" in encoded
     assert "Throne" in encoded
     assert "USD" in encoded and "EUR" in encoded
-    assert len(
-        [item for item in _all_items(view) if isinstance(item, discord.ui.Separator)]
-    ) == 2
+    assert len([item for item in _all_items(view) if isinstance(item, discord.ui.Separator)]) == 2
     section = next(item for item in _all_items(view) if isinstance(item, discord.ui.Section))
     assert isinstance(section.accessory, discord.ui.Thumbnail)
 
@@ -350,9 +352,7 @@ def test_public_profile_hides_empty_sections_and_viewer_edit_control() -> None:
     ):
         assert hidden not in encoded
     assert not any(isinstance(item, discord.ui.Thumbnail) for item in _all_items(view))
-    assert len(
-        [item for item in _all_items(view) if isinstance(item, discord.ui.Separator)]
-    ) == 1
+    assert len([item for item in _all_items(view) if isinstance(item, discord.ui.Separator)]) == 1
 
 
 def test_public_profile_viewer_keeps_link_controls_without_owner_edit() -> None:
@@ -433,8 +433,7 @@ def test_every_profile_wizard_state_has_compact_v2_structure(step: DraftStepKey)
 
     encoded = str(view.to_components())
     assert "-# Bill Profile Setup" in encoded
-    assert "Current step" in encoded
-    assert "Orientation" in encoded
+    assert "Step " in encoded
     assert any(isinstance(item, discord.ui.Section) for item in _all_items(view))
     assert len(_all_items(view)) <= 40
     assert all(len(row.children) <= 5 for row in _rows(view))
@@ -462,7 +461,7 @@ def test_profile_wizard_collapses_throne_state_without_exposing_creator_id() -> 
 
     encoded = str(profile_wizard_view(state).to_components())
 
-    assert "Throne connected" in encoded
+    assert "Throne:** Connected" in encoded
     assert "private_creator_id" not in encoded
 
 
@@ -600,48 +599,6 @@ def test_setup_view_gracefully_handles_missing_guild_icon() -> None:
     assert not any(isinstance(item, discord.ui.Thumbnail) for item in _all_items(view))
 
 
-@pytest.mark.parametrize(
-    ("orientation", "honourifics", "labels", "aliases", "stats"),
-    [
-        (Orientation.DOMME, ["Goddess"], [], [], False),
-        (Orientation.SUBMISSIVE, [], ["Pet"], ["name"], True),
-        (Orientation.SWITCH_DOMME, ["Mistress"], ["Brat"], ["name"], True),
-        (Orientation.SWITCH_SUBMISSIVE, ["Mommy"], ["Sub"], ["name"], True),
-    ],
-)
-def test_identity_payload_obeys_each_orientation_capability(
-    orientation: Orientation,
-    honourifics: list[str],
-    labels: list[str],
-    aliases: list[str],
-    stats: bool,
-) -> None:
-    values = _identity_values(
-        replace(identity_draft(status=DmStatus.OPEN), governing_orientation=orientation),
-        "She/Her",
-        ",".join(honourifics),
-        ",".join(labels),
-        ",".join(aliases),
-        "on",
-        "hello",
-    )
-
-    assert values["honourifics"] == honourifics
-    assert values["submissive_labels"] == labels
-    assert values["aliases"] == aliases
-    assert values["public_send_stats"] is stats
-
-
-def test_linked_identity_can_inherit_every_field_sparsely() -> None:
-    linked = identity_draft(scope=DraftScope.SERVER, mode=ServerProfileMode.LINKED)
-
-    values = _identity_values(linked, "", "", "", "", "inherit", "")
-
-    assert values["overrides"] == []
-    assert values["dm_status"] is None
-    assert values["bio"] is None
-
-
 def test_dm_status_menu_has_exact_options_and_no_implicit_global_default() -> None:
     select = DmStatusSelect(identity_draft())
 
@@ -662,9 +619,7 @@ def test_non_linked_dm_status_menu_defaults_only_to_saved_choice(
     scope: DraftScope,
     mode: ServerProfileMode | None,
 ) -> None:
-    select = DmStatusSelect(
-        identity_draft(status=DmStatus.AFTER_TRIBUTE, scope=scope, mode=mode)
-    )
+    select = DmStatusSelect(identity_draft(status=DmStatus.AFTER_TRIBUTE, scope=scope, mode=mode))
 
     assert len(select.options) == 4
     assert [option.value for option in select.options if option.default] == ["after_tribute"]
@@ -699,9 +654,7 @@ def test_linked_dm_status_menu_defaults_to_inheritance_or_explicit_override() ->
     )
     assert [option.value for option in inherited.options if option.default] == ["inherit"]
     assert [option.value for option in overridden.options if option.default] == ["closed"]
-    assert "Use global setting keeps this server's DM status linked" in str(
-        profile_wizard_view(linked).to_components()
-    )
+    assert "Use global setting" in str(profile_wizard_view(linked).to_components())
 
 
 def test_other_partial_identity_selection_does_not_default_dm_status() -> None:
@@ -735,6 +688,7 @@ def test_dm_status_partial_mutation_preserves_other_identity_fields() -> None:
         "bio": "Existing bio",
         "public_send_stats": True,
         "aliases": ["alias"],
+        "profile_color": None,
         "complete": False,
         "dm_status_selected": True,
     }
@@ -756,26 +710,9 @@ def test_linked_inherit_partial_removes_only_dm_status_override() -> None:
     assert values["dm_status_selected"] is True
 
 
-def test_identity_completion_requires_non_linked_dm_status() -> None:
-    with pytest.raises(ValueError, match="choose a DM status from the menu"):
-        _identity_values(identity_draft(), "", "", "", "", "off", "")
-
-
-def test_identity_modal_contains_no_dm_status_or_pipe_delimited_input() -> None:
-    modal = IdentityModal(identity_draft(status=DmStatus.OPEN), object())  # type: ignore[arg-type]
-    labels = [item.label for item in modal.children if isinstance(item, discord.ui.TextInput)]
-
-    assert labels == [
-        "Aliases, comma separated (- clears)",
-        "Public send stats: on/off/inherit",
-        "Bio (- clears; blank inherits when linked)",
-    ]
-    assert all("DM status" not in label and "|" not in label for label in labels)
-
-
 @pytest.mark.asyncio
 async def test_dm_status_select_persists_revision_bound_partial_mutation() -> None:
-    state = identity_draft()
+    state = replace(identity_draft(), wizard_stage=WizardStage.DM_STATUS)
     calls: list[dict[str, object]] = []
 
     class Worker:
@@ -806,11 +743,11 @@ async def test_dm_status_select_persists_revision_bound_partial_mutation() -> No
         response=SelectResponse(),
     )
     item = discord.ui.Select(
-        custom_id=wizard_custom_id(state, "identity-dm-status"),
+        custom_id=wizard_custom_id(state, "dm-status"),
         options=[discord.SelectOption(label="Closed", value="closed")],
     )
     item._values = ["closed"]
-    dynamic = ProfileSelectDynamic(item, "draft_1", "1", "2", 3, "identity-dm-status")
+    dynamic = ProfileSelectDynamic(item, "draft_1", "1", "2", 3, "dm-status")
 
     await dynamic.callback(interaction)  # type: ignore[arg-type]
 
@@ -828,6 +765,7 @@ async def test_dm_status_select_persists_revision_bound_partial_mutation() -> No
                 "bio": None,
                 "public_send_stats": False,
                 "aliases": [],
+                "profile_color": None,
                 "complete": False,
                 "dm_status_selected": True,
             },
@@ -944,11 +882,11 @@ async def test_dm_status_select_rejects_stale_revision_before_mutation() -> None
         response=StaleResponse(),
     )
     item = discord.ui.Select(
-        custom_id=wizard_custom_id(state, "identity-dm-status"),
+        custom_id=wizard_custom_id(state, "dm-status"),
         options=[discord.SelectOption(label="Closed", value="closed")],
     )
     item._values = ["closed"]
-    dynamic = ProfileSelectDynamic(item, "draft_1", "1", "2", 3, "identity-dm-status")
+    dynamic = ProfileSelectDynamic(item, "draft_1", "1", "2", 3, "dm-status")
 
     await dynamic.callback(interaction)  # type: ignore[arg-type]
 
@@ -1040,3 +978,214 @@ def test_realistic_persistent_ids_fit_discord_limit() -> None:
         for action in (*PROFILE_WIZARD_BUTTON_ACTIONS, *PROFILE_WIZARD_SELECT_ACTIONS)
     )
     assert len(setup_custom_id(setup, "complete")) <= 100
+
+
+@pytest.mark.parametrize(
+    ("orientation", "expected"),
+    [
+        (
+            Orientation.DOMME,
+            (
+                WizardStage.ORIENTATION,
+                WizardStage.PRONOUNS,
+                WizardStage.HONOURIFICS,
+                WizardStage.DM_STATUS,
+                WizardStage.BIO,
+                WizardStage.PROFILE_COLOR,
+                WizardStage.LINKS,
+                WizardStage.THRONE,
+                WizardStage.REVIEW,
+            ),
+        ),
+        (
+            Orientation.SUBMISSIVE,
+            (
+                WizardStage.ORIENTATION,
+                WizardStage.PRONOUNS,
+                WizardStage.SUBMISSIVE_LABELS,
+                WizardStage.DM_STATUS,
+                WizardStage.BIO,
+                WizardStage.PROFILE_COLOR,
+                WizardStage.LINKS,
+                WizardStage.DETAILS,
+                WizardStage.REVIEW,
+            ),
+        ),
+        (
+            Orientation.SWITCH_DOMME,
+            tuple(WizardStage),
+        ),
+        (
+            Orientation.SWITCH_SUBMISSIVE,
+            tuple(WizardStage),
+        ),
+    ],
+)
+def test_conditional_wizard_stage_sequences(
+    orientation: Orientation,
+    expected: tuple[WizardStage, ...],
+) -> None:
+    assert wizard_stages(orientation) == expected
+
+
+def test_linked_wizard_inherits_orientation_but_keeps_conditional_sequence() -> None:
+    stages = wizard_stages(Orientation.DOMME, linked=True)
+
+    assert WizardStage.ORIENTATION not in stages
+    assert stages[0] is WizardStage.PRONOUNS
+    assert WizardStage.THRONE not in stages
+
+
+@pytest.mark.parametrize("stage", list(WizardStage))
+def test_every_guided_stage_is_neutral_restart_safe_and_within_component_limits(
+    stage: WizardStage,
+) -> None:
+    state = replace(
+        draft(),
+        governing_orientation=Orientation.SWITCH_DOMME,
+        wizard_stage=stage,
+        document=replace(
+            draft().document,
+            dm_status=DmStatus.OPEN,
+            selections=ProfileSelections(("They/Them",), (), ()),
+        ),
+    )
+
+    view = profile_wizard_view(state, presentation=MemberPresentation("Member"))
+    encoded = str(view.to_components())
+    containers = [item for item in view.children if isinstance(item, discord.ui.Container)]
+
+    assert f"Step {wizard_stages(Orientation.SWITCH_DOMME).index(stage) + 1} of " in encoded
+    assert containers[0].accent_color is None
+    assert all(len(row.children) <= 5 for row in _rows(view))
+    assert len(_all_items(view)) <= 40
+    assert all(
+        len(item.custom_id or "") <= 100
+        for item in _all_items(view)
+        if isinstance(item, (discord.ui.Button, discord.ui.Select))
+    )
+
+
+def test_bill_palette_is_named_strict_rgb_and_includes_neutral_choice() -> None:
+    assert [name for name, _ in PROFILE_COLOR_OPTIONS] == [
+        "Blue",
+        "Purple",
+        "Rose",
+        "Red",
+        "Orange",
+        "Gold",
+        "Emerald",
+        "Teal",
+    ]
+    assert all(0 <= value <= 0xFFFFFF for _, value in PROFILE_COLOR_OPTIONS)
+    select = ProfileColorSelect(
+        replace(
+            identity_draft(),
+            wizard_stage=WizardStage.PROFILE_COLOR,
+        )
+    )
+    assert select.options[-1].label == "No colour"
+
+
+def test_linked_colour_distinguishes_inherit_explicit_clear_and_override() -> None:
+    linked = replace(
+        identity_draft(scope=DraftScope.SERVER, mode=ServerProfileMode.LINKED),
+        wizard_stage=WizardStage.PROFILE_COLOR,
+    )
+    inherited = ProfileColorSelect(linked)
+    cleared = ProfileColorSelect(
+        replace(
+            linked,
+            document=replace(
+                linked.document,
+                overridden_fields=("profile_color",),
+            ),
+        )
+    )
+    blue = ProfileColorSelect(
+        replace(
+            linked,
+            document=replace(
+                linked.document,
+                profile_color=0x5865F2,
+                overridden_fields=("profile_color",),
+            ),
+        )
+    )
+
+    assert [option.value for option in inherited.options if option.default] == ["inherit"]
+    assert [option.value for option in cleared.options if option.default] == ["none"]
+    assert [option.value for option in blue.options if option.default] == ["5865f2"]
+
+
+def test_free_text_is_confined_to_focused_modals() -> None:
+    state = replace(
+        identity_draft(status=DmStatus.OPEN),
+        wizard_stage=WizardStage.DETAILS,
+    )
+    bio = BioModal(state, object())  # type: ignore[arg-type]
+    aliases = AliasModal(state, object())  # type: ignore[arg-type]
+    color = ProfileColorModal(state, object())  # type: ignore[arg-type]
+    link = LinkModal(
+        state,
+        object(),  # type: ignore[arg-type]
+        link_type=LinkType.SOCIAL,
+    )
+
+    assert len(bio.children) == 1
+    assert len(aliases.children) == 1
+    assert len(color.children) == 1
+    assert all(
+        "social or payment" not in str(getattr(item, "label", "")).casefold()
+        for item in link.children
+    )
+    text_fields = (*bio.children, *aliases.children)
+    assert not any("|" in str(getattr(item, "label", "")) for item in text_fields)
+
+
+def test_stats_are_a_menu_not_free_text() -> None:
+    state = replace(
+        identity_draft(status=DmStatus.OPEN),
+        wizard_stage=WizardStage.DETAILS,
+    )
+    select = StatsSelect(state)
+
+    assert [(option.label, option.value) for option in select.options] == [
+        ("Show send stats", "show"),
+        ("Hide send stats", "hide"),
+    ]
+
+
+def test_review_preview_and_public_profile_use_selected_accent_only() -> None:
+    state = replace(
+        identity_draft(status=DmStatus.OPEN),
+        governing_orientation=Orientation.SWITCH_DOMME,
+        wizard_stage=WizardStage.REVIEW,
+        document=replace(identity_draft().document, profile_color=0x2EAD78),
+    )
+    review = profile_wizard_view(state)
+    public = public_profile_view(
+        _profile(profile_color=0x2EAD78),
+        guild_id=2,
+        owner_view=False,
+        presentation=MemberPresentation("Member"),
+    )
+
+    review_containers = [item for item in review.children if isinstance(item, discord.ui.Container)]
+    public_container = next(
+        item for item in public.children if isinstance(item, discord.ui.Container)
+    )
+    assert review_containers[0].accent_color is None
+    assert review_containers[1].accent_color == discord.Color(0x2EAD78)
+    assert public_container.accent_color == discord.Color(0x2EAD78)
+
+
+def test_server_setup_container_remains_neutral() -> None:
+    session = GuildSetupSession(
+        "setup", "2", "1", "active", "select_channel", None, 4, None, None, None, None, None
+    )
+    view = setup_view(session)
+    container = next(item for item in view.children if isinstance(item, discord.ui.Container))
+
+    assert container.accent_color is None
+    assert "View Channel" in str(view.to_components())

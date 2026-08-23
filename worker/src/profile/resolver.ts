@@ -46,6 +46,12 @@ export interface ResolvedProfile {
   readonly aliases: string[];
   readonly links: ResolvedLink[];
   readonly preferredPaymentLinkId: string | null;
+  /** The published card's accent colour (0x000000-0xFFFFFF), or `null` for a neutral card.
+   * On a `linked` server profile this is the global document's colour unless the overlay
+   * carries a `profile_color` override row -- an override row with a NULL column means the
+   * owner deliberately chose "no colour" for this guild, which is *not* the same as
+   * inheriting a global colour that happens to be unset. */
+  readonly profileColor: number | null;
   readonly throneConnected: boolean;
   /** Per-currency attributed send counts/totals for *this guild*, present only when
    * `publicSendStats` is enabled -- `null` otherwise (including when the capability/orientation
@@ -70,6 +76,7 @@ interface DocumentRow {
   public_send_stats: number;
   throne_creator_id: string | null;
   preferred_payment_link_id: string | null;
+  profile_color: number | null;
 }
 
 interface SelectionRow {
@@ -96,7 +103,8 @@ interface LinkRow {
 
 async function loadDocument(env: Env, documentId: string): Promise<DocumentRow | null> {
   return env.DB.prepare(
-    `SELECT id, owner_user_id, orientation, dm_status, bio, public_send_stats, throne_creator_id, preferred_payment_link_id
+    `SELECT id, owner_user_id, orientation, dm_status, bio, public_send_stats, throne_creator_id,
+            preferred_payment_link_id, profile_color
        FROM profile_documents WHERE id = ?`,
   )
     .bind(documentId)
@@ -178,6 +186,7 @@ async function resolveCompleteDocument(
     aliases,
     links,
     preferredPaymentLinkId: choosePreferredPayment(links, document.preferred_payment_link_id),
+    profileColor: document.profile_color,
     throneConnected: document.throne_creator_id !== null,
     sendStats: null,
     version,
@@ -303,6 +312,7 @@ async function resolveLinkedOverlay(
     aliases,
     links,
     preferredPaymentLinkId: choosePreferredPayment(links, preferredCandidate),
+    profileColor: overridden.has("profile_color") ? overlayDoc.profile_color : globalDoc.profile_color,
     throneConnected: globalDoc.throne_creator_id !== null,
     sendStats: null,
     version: serverRoot.version,

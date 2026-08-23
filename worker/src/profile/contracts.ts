@@ -55,7 +55,30 @@ export const LIMITS = {
   linkLabelMaxChars: 40,
   linkUrlMaxChars: 500,
   linkMaxCount: 12,
+  profileColorMax: 0xffffff,
+  wizardSubstepMaxChars: 40,
 } as const;
+
+/**
+ * Tasteful named presets offered by the wizard's colour picker, plus the
+ * implicit "No colour" choice (represented as `null`, not a thirteenth
+ * entry here). These are documentation/UX convenience only -- the Worker's
+ * one storage rule is the RGB range check in `parseOptionalColor`, so a
+ * caller-entered custom hex value outside this list is just as valid as a
+ * preset. Custom hex *format* validation (e.g. rejecting `#zzzzzz`) is
+ * bot-facing UI concern; by the time a value reaches the Worker it must
+ * already be the resolved integer.
+ */
+export const PROFILE_COLOR_PRESETS = [
+  { name: "Blue", value: 0x5865f2 },
+  { name: "Purple", value: 0x9b59b6 },
+  { name: "Rose", value: 0xe0568a },
+  { name: "Red", value: 0xe74c3c },
+  { name: "Orange", value: 0xe67e22 },
+  { name: "Gold", value: 0xd4a72c },
+  { name: "Emerald", value: 0x2ead78 },
+  { name: "Teal", value: 0x2aa198 },
+] as const;
 
 /**
  * Per-orientation feature capabilities. Pronouns are available to every
@@ -112,6 +135,83 @@ export const ORIENTATION_CAPABILITIES: Readonly<Record<Orientation, OrientationC
 export const STEP_KEYS = ["orientation", "identity", "links", "throne", "review"] as const;
 export type StepKey = (typeof STEP_KEYS)[number];
 
+/**
+ * The bot's finer-grained wizard screens, one level more granular than
+ * `StepKey` (several stages -- pronouns/honourifics/submissive_labels/
+ * dm_status/bio/profile_color -- all live inside the single `identity`
+ * step). This vocabulary is intentionally *not* a DB CHECK constraint (see
+ * migration 0004): it is validated here, the same way `OVERRIDABLE_FIELDS`
+ * and category `value`s already are, so the bot's UI can grow a new stage
+ * without a schema change.
+ */
+export const WIZARD_STAGES = [
+  "orientation",
+  "pronouns",
+  "honourifics",
+  "submissive_labels",
+  "dm_status",
+  "bio",
+  "profile_color",
+  "links",
+  "throne",
+  "details",
+  "review",
+] as const;
+export type WizardStage = (typeof WIZARD_STAGES)[number];
+
+export function isWizardStage(value: unknown): value is WizardStage {
+  return typeof value === "string" && (WIZARD_STAGES as readonly string[]).includes(value);
+}
+
+/**
+ * Every orientation is *some* kind of capable while orientation is still
+ * unchosen: an orientation-less draft is only ever showing the orientation
+ * screen, so offering the widest stage sequence keeps a bookmark valid
+ * whichever orientation the owner picks a moment later. This mirrors the
+ * bot's own `_caps(None)` fallback exactly, which is what makes the two
+ * sides agree about which stage bookmarks are acceptable.
+ */
+const UNRESTRICTED_CAPABILITIES: OrientationCapabilities = {
+  honourifics: true,
+  submissiveLabels: true,
+  aliases: true,
+  stats: true,
+  throne: true,
+  payment: true,
+};
+
+/**
+ * The wizard screen sequence for a draft, in display order. This is the
+ * stage-level analogue of `stepsForDraft` and mirrors the bot's
+ * `wizard_stages()` exactly, so a bookmark the bot can navigate to is
+ * always one this Worker will accept, and vice versa:
+ *
+ * - a `linked` overlay never chooses its own orientation or Throne
+ *   connection (both are inherited live from the global document), so
+ *   neither stage appears;
+ * - honourifics/submissive-label/details screens follow the same
+ *   capability gating as the coarse steps;
+ * - `profile_color` is available to every orientation, like `bio`.
+ */
+export function wizardStagesForDraft(
+  targetScope: TargetScope,
+  serverMode: ServerMode | null,
+  orientation: Orientation | null,
+): readonly WizardStage[] {
+  const linked = targetScope === "server" && serverMode === "linked";
+  const caps = orientation === null ? UNRESTRICTED_CAPABILITIES : ORIENTATION_CAPABILITIES[orientation];
+  const stages: WizardStage[] = [];
+  if (!linked) stages.push("orientation");
+  stages.push("pronouns");
+  if (caps.honourifics) stages.push("honourifics");
+  if (caps.submissiveLabels) stages.push("submissive_labels");
+  stages.push("dm_status", "bio", "profile_color", "links");
+  if (orientation !== null && caps.throne && !linked) stages.push("throne");
+  if (caps.aliases || caps.stats) stages.push("details");
+  stages.push("review");
+  return stages;
+}
+
 /** The step sequence a draft must complete, given its (possibly still-unset) orientation. */
 export function stepsForOrientation(orientation: Orientation | null): readonly StepKey[] {
   if (orientation === null) return ["orientation"];
@@ -133,6 +233,7 @@ export const OVERRIDABLE_FIELDS = [
   "bio",
   "public_send_stats",
   "aliases",
+  "profile_color",
 ] as const;
 export type OverridableField = (typeof OVERRIDABLE_FIELDS)[number];
 
@@ -162,6 +263,78 @@ export class ValidationError extends Error {
 
 function fail(code: string, message: string): never {
   throw new ValidationError(code, message);
+}
+
+/**
+ * The bookmark update a caller may attach to *any* step mutation (see
+ * `draftService.applyDraftStep`): each field is `undefined` when the
+ * caller's body omits the key at all (meaning "leave the draft's stored
+ * value unchanged"), explicit `null` to clear it, or a valid value. This
+ * three-way distinction is why callers must check `"wizard_stage" in body`
+ * rather than merely `body.wizard_stage === undefined`.
+ */
+export interface WizardStageUpdate {
+  readonly wizardStage: WizardStage | null | undefined;
+  readonly wizardSubstep: string | null | undefined;
+}
+
+export function parseWizardStageUpdate(record: Record<string, unknown>): WizardStageUpdate {
+  let wizardStage: WizardStage | null | undefined;
+  if ("wizard_stage" in record) {
+    const raw = record.wizard_stage;
+    if (raw === null) {
+      wizardStage = null;
+    } else if (isWizardStage(raw)) {
+      wizardStage = raw;
+    } else {
+      fail("invalid_wizard_stage", `wizard_stage must be one of: ${WIZARD_STAGES.join(", ")}`);
+    }
+  }
+
+  let wizardSubstep: string | null | undefined;
+  if ("wizard_substep" in record) {
+    wizardSubstep = parseOptionalSubstep(record.wizard_substep, "wizard_substep");
+  }
+
+  return { wizardStage, wizardSubstep };
+}
+
+/**
+ * The dedicated `PUT .../wizard-stage` body (beyond the standard
+ * `owner_user_id`/`expected_revision` mutation envelope the route itself
+ * validates).
+ *
+ * Unlike the optional bookmark a step mutation may carry, `stage` is
+ * required here -- this endpoint exists precisely to record one -- and an
+ * *omitted* `substep` deliberately means "clear it", not "leave it alone".
+ * That normalization is what makes a substep strictly scoped to the single
+ * screen that set it: a caller that navigates anywhere without naming a
+ * substep can never inherit a stale one (e.g. a leftover "verified" from an
+ * earlier Throne check, or a "review" return-marker from an edit jump).
+ */
+export interface WizardStageRequest {
+  readonly stage: WizardStage;
+  readonly substep: string | null;
+}
+
+export function parseWizardStageRequest(record: Record<string, unknown>): WizardStageRequest {
+  const rawStage = record.stage;
+  if (!isWizardStage(rawStage)) {
+    fail("invalid_wizard_stage", `stage must be one of: ${WIZARD_STAGES.join(", ")}`);
+  }
+  const substep = "substep" in record ? parseOptionalSubstep(record.substep, "substep") : null;
+  return { stage: rawStage, substep };
+}
+
+function parseOptionalSubstep(raw: unknown, field: string): string | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "string" || raw.trim().length === 0 || raw.length > LIMITS.wizardSubstepMaxChars) {
+    fail(
+      "invalid_wizard_substep",
+      `${field} must be a non-empty string of at most ${LIMITS.wizardSubstepMaxChars} characters, or null`,
+    );
+  }
+  return raw;
 }
 
 export function isOrientation(value: unknown): value is Orientation {
@@ -196,6 +369,7 @@ export interface IdentityStepInput {
   readonly bio: string | null;
   readonly publicSendStats: boolean;
   readonly aliases: string[];
+  readonly profileColor: number | null;
 }
 
 /**
@@ -239,6 +413,10 @@ export function parseIdentityStep(
     ? parseAliases(record.aliases)
     : (requireEmptyOrAbsent(record.aliases, "aliases", orientation), []);
 
+  // Available to every orientation, unlike honourifics/labels/aliases/stats: the accent colour
+  // gates nothing else and has no per-orientation capability to check.
+  const profileColor = parseOptionalColor(record.profile_color);
+
   return {
     pronouns,
     honourifics,
@@ -247,6 +425,7 @@ export function parseIdentityStep(
     bio,
     publicSendStats,
     aliases,
+    profileColor,
   };
 }
 
@@ -373,6 +552,7 @@ export interface LinkedIdentityStepInput {
   readonly bio: string | null;
   readonly publicSendStats: boolean;
   readonly aliases: string[];
+  readonly profileColor: number | null;
 }
 
 function parseOverridesList(value: unknown, caps: OrientationCapabilities): Set<OverridableField> {
@@ -422,8 +602,9 @@ export function parseLinkedIdentityStep(body: unknown, globalOrientation: Orient
     ? parseOptionalBoolean(record.public_send_stats, "public_send_stats")
     : false;
   const aliases = overriddenFields.has("aliases") ? parseAliases(record.aliases) : [];
+  const profileColor = overriddenFields.has("profile_color") ? parseOptionalColor(record.profile_color) : null;
 
-  return { overriddenFields, pronouns, honourifics, submissiveLabels, dmStatus, bio, publicSendStats, aliases };
+  return { overriddenFields, pronouns, honourifics, submissiveLabels, dmStatus, bio, publicSendStats, aliases, profileColor };
 }
 
 export interface LinkedLinksStepInput {
@@ -474,6 +655,25 @@ function parseOptionalId(value: unknown, field: string): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== "string" || value.trim().length === 0) {
     fail("invalid_field", `${field} must be a non-empty string or null`);
+  }
+  return value;
+}
+
+/**
+ * A document's optional accent colour: an absent or explicit `null` value
+ * means "no colour" (a deliberate, valid choice, not merely unset -- see
+ * migration 0004), and any other value must be an in-range RGB integer.
+ * This is the one place storage range validation happens; the wizard's
+ * named presets (`PROFILE_COLOR_PRESETS`) are just documentation and are
+ * never specially required here.
+ */
+export function parseOptionalColor(value: unknown, field = "profile_color"): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    fail("invalid_field", `${field} must be an integer or null`);
+  }
+  if (value < 0 || value > LIMITS.profileColorMax) {
+    fail("invalid_profile_color", `${field} must be between 0 and ${LIMITS.profileColorMax} (0xFFFFFF)`);
   }
   return value;
 }

@@ -7,9 +7,10 @@ interaction state, D1 state, and Throne delivery behavior consistent.
 
 1. `bill/settings.py`, then `worker/src/env.ts`: the same home-guild and API
    boundary configuration is validated on both sides.
-2. `worker/migrations/0001_init.sql`, `0002_profile_system.sql`, and
-   `0003_links_and_setup.sql`: existing send tracking first, then additive
-   profile documents/drafts, then link imports/setup sessions/attribution.
+2. `worker/migrations/0001_init.sql` through the additive `0004` profile-wizard
+   migration: existing send tracking first, then profile documents/drafts, link
+   imports/setup sessions/attribution, and finally profile colour plus resumable
+   wizard stage state.
 3. `worker/src/profile/contracts.ts` and `documentStore.ts`: fixed values,
    validation limits, immutable document snapshots, and guarded batch writes.
 4. `draftService.ts`, `resolver.ts`, and `publishService.ts`: durable editing,
@@ -49,6 +50,9 @@ overrides, publication history, and drafts. `0003` adds static link imports,
 public guild setup sessions, nullable future-send attribution, and
 `profile_managed` registration provenance. Existing registrations default to
 legacy provenance and are never silently replaced by a profile.
+Migration `0004` is additive over populated `0001`-`0003` databases. It adds the
+nullable RGB accent and durable wizard stage/substep state, with deterministic
+backfill from each active draft's existing step and document state.
 
 A published document is never edited. Starting an edit clones the currently
 applicable snapshot into a private draft document. A root points to one
@@ -79,25 +83,34 @@ an equivalent rollback tripwire.
 ```mermaid
 stateDiagram-v2
   [*] --> Orientation
-  Orientation --> Identity
-  Identity --> Links
+  Orientation --> Pronouns
+  Pronouns --> Titles
+  Titles --> Labels
+  Pronouns --> Labels
+  Titles --> DMStatus
+  Labels --> DMStatus
+  DMStatus --> Bio
+  Bio --> Colour
+  Colour --> Links
   Links --> Throne: Dom/me or switch
-  Links --> Review: Submissive
-  Throne --> Review
+  Links --> Details: Submissive
+  Throne --> Details: Switch
+  Throne --> Review: Dom/me
+  Details --> Review
   Review --> Published: Publish CAS succeeds
-  Review --> Identity: Edit identity
+  Review --> Pronouns: Edit identity
   Review --> Links: Edit links
   Review --> Throne: Edit Throne
 ```
 
-Linked server drafts omit orientation and Throne because both come from the
-live global profile. Completed sections render collapsed summaries, but D1 step
-rows—not the rendered message—decide what is complete. Custom IDs bind the
-draft/session, revision, action, user, and guild context. Dynamic persistent
-items route interactions after bot restarts; each callback still reloads and
-re-authorizes the durable record. UUIDs, snowflakes, and revisions use
-reversible compact encodings so this context remains within Discord's
-100-character custom-ID limit.
+Linked server drafts omit orientation and Throne because both come from the live
+global profile. D1 step rows own logical completion and the wizard stage/substep
+owns the exact screen.
+Custom IDs bind the draft/session, revision, action, user, and guild context.
+Dynamic persistent items route interactions after bot restarts; each callback
+still reloads and re-authorizes the durable record. UUIDs, snowflakes, and
+revisions use reversible compact encodings so this context remains within
+Discord's 100-character custom-ID limit.
 
 ## Global, linked, and independent resolution
 
@@ -106,6 +119,9 @@ The home guild reads `global_profiles`. Another guild requires a
 Linked roots read the latest global document, apply only fields with explicit
 override markers, remove explicitly hidden inherited links, add local links,
 and choose the first valid visible payment fallback deterministically.
+`profile_color` is sparse in the same way: no override means inherit, an
+override with `null` means deliberately publish without an accent, and an RGB
+integer means use that local colour.
 
 This design prevents global edits from becoming stale copies while still
 allowing a member to clear a field or hide one link in a particular server.
@@ -174,7 +190,7 @@ order is:
 1. Set Worker `BILL_HOME_GUILD_ID`.
 2. `cd worker && npx wrangler d1 migrations apply bill --remote`
 3. `npx wrangler deploy`
-4. Set the same bot `BILL_HOME_GUILD_ID` and restart the bot.
+4. Restart the bot only after the Worker deployment is live.
 
 See `docs/deployment.md` for the complete host setup and required secrets.
 

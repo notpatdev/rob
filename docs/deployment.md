@@ -38,9 +38,20 @@ npx wrangler d1 migrations apply bill --remote
 npx wrangler deploy
 ```
 
-The exact live order is: Worker `BILL_HOME_GUILD_ID`, D1 migrations, Worker
-deploy, bot `BILL_HOME_GUILD_ID`, bot restart. Migrations `0002` and `0003` are
-additive over populated `0001`; do not edit or re-run `0001` manually.
+For the guided-profile release, the exact live order is:
+
+```bash
+cd worker
+npx wrangler d1 migrations apply bill --remote
+npx wrangler deploy
+sudo systemctl restart bill-bot
+```
+
+The remote additive migration must complete before the Worker uses its new
+columns, and the bot must not restart until that Worker deployment is live.
+Migrations `0002`, `0003`, and `0004` are additive over populated `0001`; do not
+edit, reset, or manually re-run `0001`-`0003`. Preserve the configured production
+D1 ID and `usebill.dev` route above.
 
 Use a long randomly generated bot API token. Set `THRONE_PUBLIC_KEY_PEM` to
 Throne's current Ed25519 public key.
@@ -85,8 +96,9 @@ the send channel. In each server:
    channel-selection flow.
 2. Members run `/profile` to create the applicable profile.
 3. Dom/me and switch profiles may connect Throne in the private DM wizard.
-4. Add any newly issued private webhook URL to Throne.
-5. Use Throne's webhook test and confirm that a real supported event posts once.
+4. Follow Bill's private numbered instructions to save any newly issued webhook
+   URL in Throne.
+5. Run Throne's **Test Webhook**, return to Bill, and press **Check Connection**.
 
 Never paste a webhook URL into a public channel, issue, log, or deployment
 output. Bill can show a new URL only on initial issue or explicit rotation.

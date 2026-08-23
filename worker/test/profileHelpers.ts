@@ -13,6 +13,7 @@ export interface SeedDocumentOptions {
   publicSendStats?: boolean;
   throneCreatorId?: string | null;
   preferredPaymentLinkId?: string | null;
+  profileColor?: number | null;
 }
 
 export async function seedDocument(options: SeedDocumentOptions): Promise<void> {
@@ -20,8 +21,8 @@ export async function seedDocument(options: SeedDocumentOptions): Promise<void> 
   await env.DB.prepare(
     `INSERT INTO profile_documents
        (id, owner_user_id, state, orientation, dm_status, bio, public_send_stats,
-        throne_creator_id, preferred_payment_link_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        throne_creator_id, preferred_payment_link_id, profile_color, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       options.id,
@@ -33,6 +34,7 @@ export async function seedDocument(options: SeedDocumentOptions): Promise<void> 
       options.publicSendStats ? 1 : 0,
       options.throneCreatorId ?? null,
       options.preferredPaymentLinkId ?? null,
+      options.profileColor ?? null,
       now,
       now,
     )

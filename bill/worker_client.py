@@ -63,6 +63,20 @@ class DraftStepKey(StrEnum):
     REVIEW = "review"
 
 
+class WizardStage(StrEnum):
+    ORIENTATION = "orientation"
+    PRONOUNS = "pronouns"
+    HONOURIFICS = "honourifics"
+    SUBMISSIVE_LABELS = "submissive_labels"
+    DM_STATUS = "dm_status"
+    BIO = "bio"
+    PROFILE_COLOR = "profile_color"
+    LINKS = "links"
+    THRONE = "throne"
+    DETAILS = "details"
+    REVIEW = "review"
+
+
 class LinkType(StrEnum):
     SOCIAL = "social"
     PAYMENT = "payment"
@@ -147,6 +161,7 @@ class PublicProfile:
     send_stats: tuple[SendStat, ...] | None
     version: int
     published_at: str | None
+    profile_color: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +189,7 @@ class DraftDocument:
     hidden_inherited_link_ids: tuple[str, ...]
     throne_creator_id: str | None
     preferred_payment_link_id: str | None
+    profile_color: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +225,8 @@ class ProfileDraft:
     updated_at: str | None
     published_at: str | None
     dm_status_selected: bool = False
+    wizard_stage: WizardStage | None = None
+    wizard_substep: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +276,13 @@ class ThroneDraftResult:
     draft: ProfileDraft
     webhook_url: str | None
     webhook_state: str
+
+
+@dataclass(frozen=True, slots=True)
+class ThroneDraftStatus:
+    handle: str | None
+    verified: bool
+    verified_at: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,6 +343,15 @@ def _integer(value: object, field: str) -> int:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise WorkerAPIError(f"Worker returned an invalid {field}") from exc
+
+
+def _optional_color(value: object, field: str = "profile_color") -> int | None:
+    if value is None:
+        return None
+    color = _integer(value, field)
+    if not 0 <= color <= 0xFFFFFF:
+        raise WorkerAPIError(f"Worker returned an invalid {field}")
+    return color
 
 
 def _enum(enum_type: type[StrEnum], value: object, field: str) -> StrEnum:
@@ -440,6 +474,26 @@ class WorkerClient:
         data = await self._request(
             "PUT",
             f"/v1/profile-drafts/{draft_id}/steps/{step.value}",
+            json=self._mutation(owner_user_id, expected_revision, values),
+        )
+        return self._parse_draft(data.get("draft"))
+
+    async def set_draft_wizard_stage(
+        self,
+        draft_id: str,
+        *,
+        owner_user_id: int | str,
+        expected_revision: int,
+        stage: WizardStage,
+        substep: str | None = None,
+    ) -> ProfileDraft:
+        values: dict[str, JSONValue] = {
+            "stage": stage.value,
+            "substep": substep,
+        }
+        data = await self._request(
+            "PUT",
+            f"/v1/profile-drafts/{draft_id}/wizard-stage",
             json=self._mutation(owner_user_id, expected_revision, values),
         )
         return self._parse_draft(data.get("draft"))
@@ -628,6 +682,24 @@ class WorkerClient:
             _string(data.get("webhook_state"), "webhook_state"),
         )
 
+    async def get_throne_status(
+        self,
+        draft_id: str,
+        *,
+        owner_user_id: int | str,
+        expected_revision: int,
+    ) -> ThroneDraftStatus:
+        data = await self._request(
+            "GET",
+            f"/v1/profile-drafts/{draft_id}/throne/status"
+            f"?owner_user_id={_snowflake(owner_user_id)}&expected_revision={expected_revision}",
+        )
+        return ThroneDraftStatus(
+            _optional_string(data.get("handle")),
+            _bool(data.get("verified"), "verified"),
+            _optional_string(data.get("verified_at")),
+        )
+
     async def start_guild_setup(
         self, *, guild_id: int | str, initiator_user_id: int | str
     ) -> StartGuildSetupResult:
@@ -813,6 +885,7 @@ class WorkerClient:
             stats,
             _integer(data.get("version"), "version"),
             _optional_string(data.get("published_at")),
+            _optional_color(data.get("profile_color")),
         )
 
     @staticmethod
@@ -856,12 +929,15 @@ class WorkerClient:
                 _strings(document.get("hidden_inherited_link_ids"), "hidden_inherited_link_ids"),
                 _optional_string(document.get("throne_creator_id")),
                 _optional_string(document.get("preferred_payment_link_id")),
+                _optional_color(document.get("profile_color")),
             ),
             parsed_prefill,
             _optional_string(data.get("created_at")),
             _optional_string(data.get("updated_at")),
             _optional_string(data.get("published_at")),
             _bool(data.get("dm_status_selected"), "dm_status_selected"),
+            _nullable_enum(WizardStage, data.get("wizard_stage"), "wizard_stage"),
+            _optional_string(data.get("wizard_substep")),
         )
 
     @staticmethod

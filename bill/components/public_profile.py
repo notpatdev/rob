@@ -64,11 +64,14 @@ def profile_links_view(
     *,
     kind: LinkType,
     presentation: MemberPresentation,
+    profile_color: int | None = None,
 ) -> discord.ui.LayoutView:
     """Render one viewer-safe link detail surface with compact HTTPS button rows."""
     title = "Payment Links" if kind is LinkType.PAYMENT else "Socials"
     view = discord.ui.LayoutView(timeout=180)
-    container = discord.ui.Container()
+    container = discord.ui.Container(
+        accent_color=None if profile_color is None else discord.Color(profile_color)
+    )
     container.add_item(discord.ui.TextDisplay(f"-# Bill Profile · {title}"))
     container.add_item(
         _profile_section(
@@ -97,7 +100,9 @@ def public_profile_view(
 ) -> discord.ui.LayoutView:
     """Render public data only; webhook identifiers and URLs never enter this view."""
     view = discord.ui.LayoutView(timeout=None)
-    container = discord.ui.Container(accent_color=discord.Color.blurple())
+    container = discord.ui.Container(
+        accent_color=None if profile.profile_color is None else discord.Color(profile.profile_color)
+    )
     container.add_item(discord.ui.TextDisplay("-# Bill Profile"))
     container.add_item(
         _profile_section(
@@ -231,6 +236,7 @@ class ProfileLinksDynamic(
                 links,
                 kind=self.kind,
                 presentation=presentation,
+                profile_color=result.profile.profile_color,
             ),
             ephemeral=True,
         )

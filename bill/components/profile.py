@@ -29,6 +29,7 @@ from bill.worker_client import (
     ProfileDraft,
     ProfileLink,
     ServerProfileMode,
+    WizardStage,
     WorkerAPIError,
 )
 
@@ -69,26 +70,55 @@ DM_STATUS_OPTIONS = (
     (DmStatus.AFTER_TRIBUTE, "After Tribute", "DMs open after tribute"),
     (DmStatus.CLOSED, "Closed", "Not accepting DMs"),
 )
+PROFILE_COLOR_OPTIONS = (
+    ("Blue", 0x5865F2),
+    ("Purple", 0x9B59B6),
+    ("Rose", 0xE0568A),
+    ("Red", 0xE74C3C),
+    ("Orange", 0xE67E22),
+    ("Gold", 0xD4A72C),
+    ("Emerald", 0x2EAD78),
+    ("Teal", 0x2AA198),
+)
 PROFILE_WIZARD_BUTTON_ACTIONS = (
     "start",
     "publish",
     "restart",
-    "identity",
-    "links",
+    "continue",
+    "back",
+    "use-global",
+    "bio",
+    "skip-bio",
+    "aliases",
+    "link-social",
+    "link-payment",
     "import",
     "visibility",
     "complete-links",
     "skip-links",
     "throne",
     "skip-throne",
+    "check-throne",
     "rotate",
+    "custom-color",
+    "edit-orientation",
+    "edit-pronouns",
+    "edit-titles",
+    "edit-dm",
+    "edit-bio",
+    "edit-color",
+    "edit-links",
+    "edit-throne",
+    "edit-details",
 )
 PROFILE_WIZARD_SELECT_ACTIONS = (
     "orientation",
-    "identity-pronouns",
-    "identity-honourifics",
-    "identity-labels",
-    "identity-dm-status",
+    "pronouns",
+    "honourifics",
+    "labels",
+    "dm-status",
+    "profile-color",
+    "stats",
     "link-select",
     "creator-select",
 )
@@ -154,20 +184,6 @@ def _caps(orientation: Orientation | None) -> tuple[bool, bool, bool, bool, bool
     return True, True, True, True, True
 
 
-def _csv(value: str, allowed: Iterable[str], field: str) -> list[str]:
-    lookup = {entry.casefold(): entry for entry in allowed}
-    result: list[str] = []
-    for entry in (item.strip() for item in value.split(",")):
-        if not entry:
-            continue
-        normalized = lookup.get(entry.casefold())
-        if normalized is None:
-            raise ValueError(f"{field} has an unrecognized value: {entry}")
-        if normalized not in result:
-            result.append(normalized)
-    return result
-
-
 def _summary(draft: ProfileDraft, key: DraftStepKey) -> str:
     if key is DraftStepKey.ORIENTATION:
         return ORIENTATION_LABELS.get(draft.governing_orientation, "Chosen orientation")
@@ -185,10 +201,154 @@ def _summary(draft: ProfileDraft, key: DraftStepKey) -> str:
     return "Ready to publish"
 
 
+def _is_linked(draft: ProfileDraft) -> bool:
+    return (
+        draft.target_scope is DraftScope.SERVER
+        and draft.server_mode is ServerProfileMode.LINKED
+    )
+
+
+def wizard_stages(
+    orientation: Orientation | None,
+    *,
+    linked: bool = False,
+) -> tuple[WizardStage, ...]:
+    stages = [WizardStage.PRONOUNS]
+    if not linked:
+        stages.insert(0, WizardStage.ORIENTATION)
+    honourifics, labels, aliases, _, stats = _caps(orientation)
+    if honourifics:
+        stages.append(WizardStage.HONOURIFICS)
+    if labels:
+        stages.append(WizardStage.SUBMISSIVE_LABELS)
+    stages.extend(
+        (
+            WizardStage.DM_STATUS,
+            WizardStage.BIO,
+            WizardStage.PROFILE_COLOR,
+            WizardStage.LINKS,
+        )
+    )
+    if orientation is not None and _caps(orientation)[3] and not linked:
+        stages.append(WizardStage.THRONE)
+    if aliases or stats:
+        stages.append(WizardStage.DETAILS)
+    stages.append(WizardStage.REVIEW)
+    return tuple(stages)
+
+
+def _legacy_stage(draft: ProfileDraft) -> WizardStage:
+    current = draft.next_step or draft.current_step or DraftStepKey.REVIEW
+    return {
+        DraftStepKey.ORIENTATION: WizardStage.ORIENTATION,
+        DraftStepKey.IDENTITY: WizardStage.PRONOUNS,
+        DraftStepKey.LINKS: WizardStage.LINKS,
+        DraftStepKey.THRONE: WizardStage.THRONE,
+        DraftStepKey.REVIEW: WizardStage.REVIEW,
+    }[current]
+
+
+def _stage(draft: ProfileDraft) -> WizardStage:
+    stage = draft.wizard_stage or _legacy_stage(draft)
+    stages = wizard_stages(draft.governing_orientation, linked=_is_linked(draft))
+    return stage if stage in stages else stages[-1]
+
+
+def _stage_title(stage: WizardStage) -> str:
+    return {
+        WizardStage.ORIENTATION: "Orientation",
+        WizardStage.PRONOUNS: "Pronouns",
+        WizardStage.HONOURIFICS: "Titles and honourifics",
+        WizardStage.SUBMISSIVE_LABELS: "Submissive labels",
+        WizardStage.DM_STATUS: "DM status",
+        WizardStage.BIO: "Bio",
+        WizardStage.PROFILE_COLOR: "Profile colour",
+        WizardStage.LINKS: "Links",
+        WizardStage.THRONE: "Connect Throne",
+        WizardStage.DETAILS: "Aliases and stats",
+        WizardStage.REVIEW: "Review and publish",
+    }[stage]
+
+
+def _colour_name(value: int | None) -> str:
+    if value is None:
+        return "No colour"
+    return next(
+        (name for name, preset in PROFILE_COLOR_OPTIONS if preset == value),
+        f"#{value:06X}",
+    )
+
+
 def _button(
     draft: ProfileDraft, label: str, action: str, style: discord.ButtonStyle
 ) -> discord.ui.Button:
     return discord.ui.Button(label=label, custom_id=wizard_custom_id(draft, action), style=style)
+
+
+def _add_navigation(
+    container: discord.ui.Container,
+    draft: ProfileDraft,
+    *,
+    inherit: bool = False,
+) -> None:
+    container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+    controls = [
+        _button(draft, "Back", "back", discord.ButtonStyle.secondary),
+        _button(draft, "Continue", "continue", discord.ButtonStyle.primary),
+    ]
+    if inherit and _is_linked(draft):
+        controls.insert(
+            0,
+            _button(draft, "Use global setting", "use-global", discord.ButtonStyle.secondary),
+        )
+    container.add_item(
+        discord.ui.ActionRow(*controls)
+    )
+
+
+def _review_preview(
+    draft: ProfileDraft,
+    presentation: MemberPresentation,
+) -> discord.ui.Container:
+    color = draft.document.profile_color
+    container = discord.ui.Container(
+        accent_color=None if color is None else discord.Color(color)
+    )
+    container.add_item(discord.ui.TextDisplay("-# Profile preview"))
+    orientation = ORIENTATION_LABELS.get(draft.governing_orientation, "Not selected")
+    status = (
+        draft.document.dm_status.value.replace("_", " ").title()
+        if draft.document.dm_status
+        else "Use global setting"
+    )
+    container.add_item(
+        _member_section(
+            presentation,
+            current_label=f"{orientation} · DMs: {status}",
+            progress_label="Preview",
+            scope_label=_colour_name(color),
+        )
+    )
+    identity = (
+        *draft.document.selections.pronouns,
+        *draft.document.selections.honourifics,
+        *draft.document.selections.submissive_labels,
+    )
+    summary = []
+    if identity:
+        summary.append(f"> **Identity:** {safe_text(', '.join(identity), limit=250)}")
+    if draft.document.bio:
+        summary.append(f"> {safe_text(draft.document.bio, limit=300)}")
+    if draft.document.aliases:
+        summary.append(
+            f"> **Aliases:** {safe_text(', '.join(draft.document.aliases), limit=200)}"
+        )
+    summary.append(f"> **Links:** {len(draft.document.links)} saved")
+    if draft.document.throne_creator_id:
+        summary.append("> **Throne:** Connected")
+    container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+    container.add_item(discord.ui.TextDisplay("\n".join(summary)))
+    return container
 
 
 def profile_intro_view(draft: ProfileDraft) -> discord.ui.View:
@@ -208,11 +368,12 @@ def _member_section(
     presentation: MemberPresentation,
     *,
     current_label: str,
+    progress_label: str,
     scope_label: str,
 ) -> discord.ui.Section | discord.ui.TextDisplay:
     title = f"### {safe_text(presentation.display_name, limit=80)}"
     metadata = (
-        f"-# Current step: {safe_text(current_label, limit=80)}",
+        f"-# {safe_text(progress_label, limit=80)} · {safe_text(current_label, limit=80)}",
         f"-# Profile: {safe_text(scope_label, limit=80)} · progress saves automatically",
     )
     if presentation.avatar_url:
@@ -227,16 +388,6 @@ def _member_section(
     return discord.ui.TextDisplay("\n".join((title, *metadata)))
 
 
-def _current_step_label(step: DraftStepKey) -> str:
-    return {
-        DraftStepKey.ORIENTATION: "Choose orientation",
-        DraftStepKey.IDENTITY: "Identity",
-        DraftStepKey.LINKS: "Links",
-        DraftStepKey.THRONE: "Throne",
-        DraftStepKey.REVIEW: "Review and publish",
-    }[step]
-
-
 def profile_wizard_view(
     draft: ProfileDraft,
     *,
@@ -244,7 +395,9 @@ def profile_wizard_view(
 ) -> discord.ui.LayoutView:
     """Render the sole editable V2 wizard message from the latest Worker state."""
     presentation = presentation or MemberPresentation("Bill member")
-    current = draft.next_step or draft.current_step or DraftStepKey.REVIEW
+    current = _stage(draft)
+    stages = wizard_stages(draft.governing_orientation, linked=_is_linked(draft))
+    position = stages.index(current) + 1
     scope_label = (
         "Global"
         if draft.target_scope is DraftScope.GLOBAL
@@ -255,99 +408,142 @@ def profile_wizard_view(
         )
     )
     view = discord.ui.LayoutView(timeout=None)
-    container = discord.ui.Container(accent_color=discord.Color.green())
+    container = discord.ui.Container()
     container.add_item(discord.ui.TextDisplay("-# Bill Profile Setup"))
     container.add_item(
         _member_section(
             presentation,
-            current_label=_current_step_label(current),
+            current_label=_stage_title(current),
+            progress_label=f"Step {position} of {len(stages)}",
             scope_label=scope_label,
         )
     )
     container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
-    completed = [
-        f"-# **{step.key.value.title()}**: {_summary(draft, step.key)} (Complete)"
-        for step in draft.steps
-        if step.status == "completed"
-    ]
-    if completed:
-        container.add_item(discord.ui.TextDisplay("\n".join(completed)))
-        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
-    if current is DraftStepKey.ORIENTATION:
+    if current is WizardStage.ORIENTATION:
         container.add_item(
             discord.ui.TextDisplay(
-                "Choose the orientation that best fits this profile. It controls which "
-                "identity, payment, and Throne options appear later."
+                "Choose the orientation that best fits this profile. This only changes which "
+                "relevant setup screens Bill shows next."
             )
         )
         container.add_item(discord.ui.ActionRow(OrientationSelect(draft)))
-    elif current is DraftStepKey.IDENTITY:
-        linked = (
-            draft.target_scope is DraftScope.SERVER
-            and draft.server_mode is ServerProfileMode.LINKED
-        )
+    elif current is WizardStage.PRONOUNS:
         container.add_item(
             discord.ui.TextDisplay(
-                "Choose a DM status and the labels you want to show, then save any optional "
-                "bio, aliases, and public send-stat preference."
-                + (
-                    " Use global setting keeps this server's DM status linked to your global "
-                    "profile."
-                    if linked
-                    else ""
-                )
+                "Choose the pronouns shown on your profile. Your saved choice is selected when "
+                "you return to this screen."
             )
         )
-        container.add_item(discord.ui.ActionRow(DmStatusSelect(draft)))
         container.add_item(
             discord.ui.ActionRow(IdentitySelect(draft, "pronouns", PRONOUNS, "Choose pronouns"))
         )
-        honourifics, labels, _, _, _ = _caps(draft.governing_orientation)
-        if honourifics:
-            container.add_item(
-                discord.ui.ActionRow(
-                    IdentitySelect(
-                        draft,
-                        "honourifics",
-                        HONOURIFICS,
-                        "Choose honourifics",
-                    )
-                )
-            )
-        if labels:
-            container.add_item(
-                discord.ui.ActionRow(
-                    IdentitySelect(
-                        draft,
-                        "labels",
-                        SUBMISSIVE_LABELS,
-                        "Choose submissive labels",
-                    )
-                )
-            )
-        container.add_item(
-            discord.ui.ActionRow(
-                _button(
-                    draft,
-                    "Save identity details",
-                    "identity",
-                    discord.ButtonStyle.primary,
-                )
-            )
-        )
-    elif current is DraftStepKey.LINKS:
-        _, _, _, payment, _ = _caps(draft.governing_orientation)
+        _add_navigation(container, draft, inherit=True)
+    elif current is WizardStage.HONOURIFICS:
         container.add_item(
             discord.ui.TextDisplay(
-                "Add social or payment links one at a time, or import a supported public "
-                "link page. Only enabled HTTPS links are shown publicly."
+                "Choose any titles or honourifics you want displayed. Leave the menu empty if "
+                "you do not use one."
+            )
+        )
+        container.add_item(
+            discord.ui.ActionRow(
+                IdentitySelect(draft, "honourifics", HONOURIFICS, "Choose titles")
+            )
+        )
+        _add_navigation(container, draft, inherit=True)
+    elif current is WizardStage.SUBMISSIVE_LABELS:
+        container.add_item(
+            discord.ui.TextDisplay(
+                "Choose any submissive labels you want displayed. Leave the menu empty if none "
+                "fit."
+            )
+        )
+        container.add_item(
+            discord.ui.ActionRow(
+                IdentitySelect(draft, "labels", SUBMISSIVE_LABELS, "Choose labels")
+            )
+        )
+        _add_navigation(container, draft, inherit=True)
+    elif current is WizardStage.DM_STATUS:
+        explanation = "Choose how people should approach your DMs."
+        if _is_linked(draft):
+            explanation += " **Use global setting** keeps this server profile linked."
+        container.add_item(discord.ui.TextDisplay(explanation))
+        container.add_item(discord.ui.ActionRow(DmStatusSelect(draft)))
+        _add_navigation(container, draft)
+    elif current is WizardStage.BIO:
+        saved = safe_text(draft.document.bio, limit=300) if draft.document.bio else "No bio saved"
+        container.add_item(
+            discord.ui.TextDisplay(
+                "Add a short public bio, edit the saved one, or skip this optional screen.\n\n"
+                f"> {saved}"
+            )
+        )
+        bio_controls = [
+            _button(
+                draft,
+                "Edit bio" if draft.document.bio else "Add bio",
+                "bio",
+                discord.ButtonStyle.primary,
+            ),
+            _button(draft, "Skip", "skip-bio", discord.ButtonStyle.secondary),
+            _button(draft, "Back", "back", discord.ButtonStyle.secondary),
+        ]
+        if _is_linked(draft):
+            bio_controls.insert(
+                1,
+                _button(
+                    draft,
+                    "Use global bio",
+                    "use-global",
+                    discord.ButtonStyle.secondary,
+                ),
+            )
+        container.add_item(discord.ui.ActionRow(*bio_controls))
+    elif current is WizardStage.PROFILE_COLOR:
+        container.add_item(
+            discord.ui.TextDisplay(
+                "Choose the accent used on your published profile card. Setup stays neutral. "
+                f"Current choice: **{_colour_name(draft.document.profile_color)}**."
+            )
+        )
+        container.add_item(discord.ui.ActionRow(ProfileColorSelect(draft)))
+        container.add_item(
+            discord.ui.ActionRow(
+                _button(draft, "Custom hex", "custom-color", discord.ButtonStyle.secondary),
+                _button(draft, "Back", "back", discord.ButtonStyle.secondary),
+                _button(draft, "Continue", "continue", discord.ButtonStyle.primary),
+            )
+        )
+    elif current is WizardStage.LINKS:
+        _, _, _, payment, _ = _caps(draft.governing_orientation)
+        summary = "\n".join(
+            f"> **{safe_text(link.public_label, limit=50)}** · {safe_text(link.platform, limit=40)}"
+            for link in draft.document.links[:8]
+        )
+        container.add_item(
+            discord.ui.TextDisplay(
+                "Add one link manually or import a supported public page. Only enabled HTTPS "
+                "links are published."
+                + (f"\n\n**Saved links**\n{summary}" if summary else "\n\n> No links saved yet")
             )
         )
         links = [
-            _button(draft, "Add link", "links", discord.ButtonStyle.primary),
+            _button(draft, "Add social link", "link-social", discord.ButtonStyle.primary),
             _button(draft, "Import page", "import", discord.ButtonStyle.secondary),
-            _button(draft, "Done", "complete-links", discord.ButtonStyle.success),
+            _button(draft, "Continue", "complete-links", discord.ButtonStyle.success),
+            _button(draft, "Back", "back", discord.ButtonStyle.secondary),
         ]
+        if payment:
+            links.insert(
+                1,
+                _button(
+                    draft,
+                    "Add payment link",
+                    "link-payment",
+                    discord.ButtonStyle.primary,
+                ),
+            )
         if not draft.document.links:
             links.append(_button(draft, "Skip", "skip-links", discord.ButtonStyle.secondary))
         if (
@@ -357,54 +553,140 @@ def profile_wizard_view(
             links.append(
                 _button(draft, "Inherited visibility", "visibility", discord.ButtonStyle.secondary)
             )
-        container.add_item(discord.ui.ActionRow(*links))
+        for index in range(0, len(links), 5):
+            container.add_item(discord.ui.ActionRow(*links[index : index + 5]))
         if draft.document.links:
             container.add_item(discord.ui.ActionRow(LinkSelect(draft, payment=payment)))
-    elif current is DraftStepKey.THRONE:
+    elif current is WizardStage.THRONE:
+        connected = draft.document.throne_creator_id is not None
+        verified = draft.wizard_substep == "verified"
+        if verified:
+            copy = (
+                "Throne has confirmed the private webhook connection. You can continue or rotate "
+                "the webhook if you need a new one."
+            )
+        elif connected:
+            copy = (
+                "Finish the connection in Throne: open your creator settings, find webhooks, "
+                "paste and save the private URL Bill showed you, run **Test Webhook**, then "
+                "return here and press **Check Connection**."
+            )
+        elif draft.wizard_substep == "confirm":
+            copy = (
+                "Confirm the resolved Throne handle shown below before Bill attaches it or "
+                "issues a private webhook."
+            )
+        else:
+            copy = (
+                "Connect Throne through a guided private verification, reuse an owned creator, "
+                "or skip for now."
+            )
         container.add_item(
-            discord.ui.TextDisplay(
-                "Connect a Throne creator, select one already saved to your account, rotate "
-                "its private webhook, or skip this step."
-            )
+            discord.ui.TextDisplay(copy)
         )
-        controls = [
-            _button(draft, "Connect Throne", "throne", discord.ButtonStyle.primary),
-            _button(draft, "Skip", "skip-throne", discord.ButtonStyle.secondary),
-        ]
-        if draft.document.throne_creator_id:
-            controls.insert(
-                1, _button(draft, "Rotate webhook", "rotate", discord.ButtonStyle.danger)
-            )
+        if connected:
+            controls = [
+                _button(draft, "Check Connection", "check-throne", discord.ButtonStyle.primary),
+                _button(draft, "Rotate webhook", "rotate", discord.ButtonStyle.danger),
+                _button(draft, "Skip for now", "skip-throne", discord.ButtonStyle.secondary),
+                _button(draft, "Back", "back", discord.ButtonStyle.secondary),
+            ]
+            if verified:
+                controls.insert(
+                    0, _button(draft, "Continue", "continue", discord.ButtonStyle.success)
+                )
+        else:
+            controls = [
+                _button(draft, "Enter Throne profile", "throne", discord.ButtonStyle.primary),
+                _button(draft, "Skip for now", "skip-throne", discord.ButtonStyle.secondary),
+                _button(draft, "Back", "back", discord.ButtonStyle.secondary),
+            ]
         container.add_item(discord.ui.ActionRow(*controls))
-        if draft.throne_prefill and draft.throne_prefill.owned_creators:
+        if not connected and draft.throne_prefill and draft.throne_prefill.owned_creators:
             options = [
-                discord.SelectOption(label=safe_text(creator.handle, limit=80), value=creator.id)
+                discord.SelectOption(
+                    label=safe_text(creator.handle, limit=80),
+                    value=creator.id,
+                    description="Already verified" if creator.id == (
+                        draft.throne_prefill.existing_registration_creator_id
+                    ) else "Owned Throne creator",
+                )
                 for creator in draft.throne_prefill.owned_creators[:25]
             ]
             container.add_item(discord.ui.ActionRow(ThroneCreatorSelect(draft, options)))
+    elif current is WizardStage.DETAILS:
+        _, _, aliases, _, stats = _caps(draft.governing_orientation)
+        details = []
+        if aliases:
+            alias_summary = safe_text(", ".join(draft.document.aliases), limit=200) or "None"
+            details.append(
+                f"> **Aliases:** {alias_summary}"
+            )
+        if stats:
+            details.append(
+                "> **Public send stats:** "
+                + ("Shown" if draft.document.public_send_stats else "Hidden")
+            )
+        container.add_item(
+            discord.ui.TextDisplay(
+                "Choose the optional details relevant to this orientation.\n\n"
+                + "\n".join(details)
+            )
+        )
+        if stats:
+            container.add_item(discord.ui.ActionRow(StatsSelect(draft)))
+        controls = []
+        if aliases:
+            controls.append(
+                _button(draft, "Edit aliases", "aliases", discord.ButtonStyle.secondary)
+            )
+        if _is_linked(draft):
+            controls.append(
+                _button(
+                    draft,
+                    "Use global details",
+                    "use-global",
+                    discord.ButtonStyle.secondary,
+                )
+            )
+        controls.extend(
+            (
+                _button(draft, "Back", "back", discord.ButtonStyle.secondary),
+                _button(draft, "Continue", "continue", discord.ButtonStyle.primary),
+            )
+        )
+        container.add_item(discord.ui.ActionRow(*controls))
     else:
         container.add_item(
             discord.ui.TextDisplay(
-                "Review the completed sections above. You can edit any section now; "
-                "nothing becomes public until you choose **Publish**. Change your DM status "
-                "below, including restoring the global setting for a linked profile."
+                "Review the compact preview below. Use an Edit control to revisit one section; "
+                "nothing becomes public until you choose **Publish**. You can also change your "
+                "DM status below, including restoring the global setting for a linked profile."
             )
         )
         container.add_item(discord.ui.ActionRow(DmStatusSelect(draft)))
         edits = [
-            _button(draft, "Edit identity", "identity", discord.ButtonStyle.secondary),
-            _button(draft, "Edit links", "links", discord.ButtonStyle.secondary),
+            _button(draft, "Edit orientation", "edit-orientation", discord.ButtonStyle.secondary),
+            _button(draft, "Edit identity", "edit-pronouns", discord.ButtonStyle.secondary),
+            _button(draft, "Edit DMs", "edit-dm", discord.ButtonStyle.secondary),
+            _button(draft, "Edit bio", "edit-bio", discord.ButtonStyle.secondary),
+            _button(draft, "Edit colour", "edit-color", discord.ButtonStyle.secondary),
         ]
-        if (
-            draft.target_scope is DraftScope.SERVER
-            and draft.server_mode is ServerProfileMode.LINKED
-        ):
-            edits.append(
-                _button(draft, "Inherited visibility", "visibility", discord.ButtonStyle.secondary)
+        container.add_item(discord.ui.ActionRow(*edits[:5]))
+        more_edits = [
+            _button(draft, "Edit titles", "edit-titles", discord.ButtonStyle.secondary),
+            _button(draft, "Edit links", "edit-links", discord.ButtonStyle.secondary),
+        ]
+        if _caps(draft.governing_orientation)[3]:
+            more_edits.append(
+                _button(draft, "Edit Throne", "edit-throne", discord.ButtonStyle.secondary)
             )
-        if draft.governing_orientation is not Orientation.SUBMISSIVE:
-            edits.append(_button(draft, "Edit Throne", "throne", discord.ButtonStyle.secondary))
-        container.add_item(discord.ui.ActionRow(*edits))
+        if _caps(draft.governing_orientation)[2] or _caps(draft.governing_orientation)[4]:
+            more_edits.append(
+                _button(draft, "Edit details", "edit-details", discord.ButtonStyle.secondary)
+            )
+        container.add_item(discord.ui.ActionRow(*more_edits))
+        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
         container.add_item(
             discord.ui.ActionRow(
                 _button(draft, "Publish", "publish", discord.ButtonStyle.success),
@@ -412,6 +694,8 @@ def profile_wizard_view(
             )
         )
     view.add_item(container)
+    if current is WizardStage.REVIEW:
+        view.add_item(_review_preview(draft, presentation))
     return view
 
 
@@ -420,6 +704,60 @@ def _wizard_for(
     draft: ProfileDraft,
 ) -> discord.ui.LayoutView:
     return profile_wizard_view(draft, presentation=member_presentation(interaction.user))
+
+
+def _adjacent_stage(
+    draft: ProfileDraft,
+    *,
+    forward: bool,
+) -> WizardStage:
+    stages = wizard_stages(draft.governing_orientation, linked=_is_linked(draft))
+    current = _stage(draft)
+    if forward and draft.wizard_substep == "review":
+        return WizardStage.REVIEW
+    index = stages.index(current)
+    offset = 1 if forward else -1
+    return stages[max(0, min(len(stages) - 1, index + offset))]
+
+
+async def _move_wizard(
+    bot: BillBot,
+    interaction: discord.Interaction[discord.Client],
+    draft: ProfileDraft,
+    stage: WizardStage,
+    *,
+    substep: str | None = None,
+) -> ProfileDraft | None:
+    try:
+        return await bot.require_worker().set_draft_wizard_stage(
+            draft.id,
+            owner_user_id=interaction.user.id,
+            expected_revision=draft.revision,
+            stage=stage,
+            substep=substep,
+        )
+    except WorkerAPIError as exc:
+        await interaction.response.send_message(
+            f"Bill could not move the profile wizard: {exc}",
+            ephemeral=True,
+        )
+        return None
+
+
+def _validate_continue(draft: ProfileDraft) -> None:
+    current = _stage(draft)
+    if current is WizardStage.PRONOUNS and not (
+        draft.document.selections.pronouns
+        or (_is_linked(draft) and "pronouns" not in draft.document.overridden_fields)
+    ):
+        raise ValueError("choose at least one pronoun")
+    if current is WizardStage.DM_STATUS and not (
+        draft.document.dm_status is not None
+        or (_is_linked(draft) and "dm_status" not in draft.document.overridden_fields)
+    ):
+        raise ValueError("choose a DM status")
+    if current is WizardStage.THRONE and draft.wizard_substep != "verified":
+        raise ValueError("verify the Throne connection or choose Skip for now")
 
 
 async def _load_draft(
@@ -468,7 +806,11 @@ class OrientationSelect(discord.ui.Select):
             custom_id=wizard_custom_id(draft, "orientation"),
             placeholder="Choose an orientation",
             options=[
-                discord.SelectOption(label=label, value=value.value)
+                discord.SelectOption(
+                    label=label,
+                    value=value.value,
+                    default=draft.governing_orientation is value,
+                )
                 for value, label in ORIENTATION_LABELS.items()
             ],
         )
@@ -489,9 +831,9 @@ class IdentitySelect(discord.ui.Select):
         else:
             selected = set(draft.document.selections.submissive_labels)
         super().__init__(
-            custom_id=wizard_custom_id(draft, f"identity-{field}"),
+            custom_id=wizard_custom_id(draft, field),
             placeholder=placeholder,
-            min_values=0,
+            min_values=1 if field == "pronouns" else 0,
             max_values=len(choices),
             options=[
                 discord.SelectOption(label=choice, value=choice, default=choice in selected)
@@ -531,8 +873,83 @@ class DmStatusSelect(discord.ui.Select):
                 )
             )
         super().__init__(
-            custom_id=wizard_custom_id(draft, "identity-dm-status"),
+            custom_id=wizard_custom_id(draft, "dm-status"),
             placeholder="Choose a DM status",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+
+class ProfileColorSelect(discord.ui.Select):
+    def __init__(self, draft: ProfileDraft) -> None:
+        linked = _is_linked(draft)
+        overridden = set(draft.document.overridden_fields)
+        inherited = linked and "profile_color" not in overridden
+        options = [
+            discord.SelectOption(
+                label=name,
+                value=f"{value:06x}",
+                default=not inherited and draft.document.profile_color == value,
+            )
+            for name, value in PROFILE_COLOR_OPTIONS
+        ]
+        options.append(
+            discord.SelectOption(
+                label="No colour",
+                value="none",
+                description="Publish a neutral profile card",
+                default=not inherited
+                and draft.document.profile_color is None
+                and (not linked or "profile_color" in overridden),
+            )
+        )
+        if linked:
+            options.append(
+                discord.SelectOption(
+                    label="Use global colour",
+                    value="inherit",
+                    description="Follow the global profile colour",
+                    default=inherited,
+                )
+            )
+        super().__init__(
+            custom_id=wizard_custom_id(draft, "profile-color"),
+            placeholder="Choose a profile colour",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+
+class StatsSelect(discord.ui.Select):
+    def __init__(self, draft: ProfileDraft) -> None:
+        linked = _is_linked(draft)
+        overridden = set(draft.document.overridden_fields)
+        inherited = linked and "public_send_stats" not in overridden
+        options = [
+            discord.SelectOption(
+                label="Show send stats",
+                value="show",
+                default=not inherited and draft.document.public_send_stats,
+            ),
+            discord.SelectOption(
+                label="Hide send stats",
+                value="hide",
+                default=not inherited and not draft.document.public_send_stats,
+            ),
+        ]
+        if linked:
+            options.append(
+                discord.SelectOption(
+                    label="Use global setting",
+                    value="inherit",
+                    default=inherited,
+                )
+            )
+        super().__init__(
+            custom_id=wizard_custom_id(draft, "stats"),
+            placeholder="Choose public send stats",
             min_values=1,
             max_values=1,
             options=options,
@@ -651,11 +1068,137 @@ class ProfileWizardDynamic(
                 "Please reopen your wizard with `/profile`.", ephemeral=True
             )
             return
-        if self.action == "identity":
-            await interaction.response.send_modal(IdentityModal(draft, message))
+        if self.action in {"continue", "back"}:
+            try:
+                if self.action == "continue":
+                    _validate_continue(draft)
+                working = draft
+                if self.action == "continue" and _stage(draft) in {
+                    WizardStage.PROFILE_COLOR,
+                    WizardStage.DETAILS,
+                    WizardStage.THRONE,
+                }:
+                    step = (
+                        DraftStepKey.THRONE
+                        if _stage(draft) is WizardStage.THRONE
+                        else DraftStepKey.IDENTITY
+                    )
+                    values = (
+                        {
+                            "throne_creator_id": draft.document.throne_creator_id,
+                            "preferred_payment_link_id": (
+                                draft.document.preferred_payment_link_id
+                            ),
+                        }
+                        if step is DraftStepKey.THRONE
+                        else _identity_step_values(draft, complete=True)
+                    )
+                    working = await bot.require_worker().update_draft_step(
+                        draft.id,
+                        step=step,
+                        owner_user_id=interaction.user.id,
+                        expected_revision=draft.revision,
+                        values=values,
+                    )
+                target = _adjacent_stage(working, forward=self.action == "continue")
+                updated = await bot.require_worker().set_draft_wizard_stage(
+                    working.id,
+                    owner_user_id=interaction.user.id,
+                    expected_revision=working.revision,
+                    stage=target,
+                )
+            except (ValueError, WorkerAPIError) as exc:
+                await interaction.response.send_message(
+                    f"Bill could not continue: {exc}",
+                    ephemeral=True,
+                )
+                return
+            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
             return
-        if self.action == "links":
-            await interaction.response.send_modal(LinkModal(draft, message))
+        if self.action == "use-global":
+            try:
+                values = _inherit_current_values(draft)
+                saved = await bot.require_worker().update_draft_step(
+                    draft.id,
+                    step=DraftStepKey.IDENTITY,
+                    owner_user_id=interaction.user.id,
+                    expected_revision=draft.revision,
+                    values=values,
+                )
+                if _stage(draft) is WizardStage.BIO:
+                    updated = await bot.require_worker().set_draft_wizard_stage(
+                        saved.id,
+                        owner_user_id=interaction.user.id,
+                        expected_revision=saved.revision,
+                        stage=_adjacent_stage(saved, forward=True),
+                    )
+                else:
+                    updated = saved
+            except (ValueError, WorkerAPIError) as exc:
+                await interaction.response.send_message(
+                    f"Bill could not restore the global setting: {exc}",
+                    ephemeral=True,
+                )
+                return
+            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
+            return
+        edit_stages = {
+            "edit-orientation": WizardStage.ORIENTATION,
+            "edit-pronouns": WizardStage.PRONOUNS,
+            "edit-titles": (
+                WizardStage.HONOURIFICS
+                if _caps(draft.governing_orientation)[0]
+                else WizardStage.SUBMISSIVE_LABELS
+            ),
+            "edit-dm": WizardStage.DM_STATUS,
+            "edit-bio": WizardStage.BIO,
+            "edit-color": WizardStage.PROFILE_COLOR,
+            "edit-links": WizardStage.LINKS,
+            "edit-throne": WizardStage.THRONE,
+            "edit-details": WizardStage.DETAILS,
+        }
+        if self.action in edit_stages:
+            updated = await _move_wizard(
+                bot,
+                interaction,
+                draft,
+                edit_stages[self.action],
+                substep="review",
+            )
+            if updated is not None:
+                await interaction.response.edit_message(view=_wizard_for(interaction, updated))
+            return
+        if self.action == "bio":
+            await interaction.response.send_modal(BioModal(draft, message))
+            return
+        if self.action == "aliases":
+            await interaction.response.send_modal(AliasModal(draft, message))
+            return
+        if self.action == "custom-color":
+            await interaction.response.send_modal(ProfileColorModal(draft, message))
+            return
+        if self.action == "skip-bio":
+            updated = await _move_wizard(
+                bot,
+                interaction,
+                draft,
+                _adjacent_stage(draft, forward=True),
+            )
+            if updated is not None:
+                await interaction.response.edit_message(view=_wizard_for(interaction, updated))
+            return
+        if self.action in {"link-social", "link-payment"}:
+            await interaction.response.send_modal(
+                LinkModal(
+                    draft,
+                    message,
+                    link_type=(
+                        LinkType.PAYMENT
+                        if self.action == "link-payment"
+                        else LinkType.SOCIAL
+                    ),
+                )
+            )
             return
         if self.action == "import":
             await interaction.response.send_modal(LinkImportModal(draft, message))
@@ -684,12 +1227,18 @@ class ProfileWizardDynamic(
             return
         if self.action in {"complete-links", "skip-links"}:
             try:
-                updated = await bot.require_worker().update_draft_step(
+                saved = await bot.require_worker().update_draft_step(
                     draft.id,
                     step=DraftStepKey.LINKS,
                     owner_user_id=interaction.user.id,
                     expected_revision=draft.revision,
                     values=_links_step_values(draft),
+                )
+                updated = await bot.require_worker().set_draft_wizard_stage(
+                    saved.id,
+                    owner_user_id=interaction.user.id,
+                    expected_revision=saved.revision,
+                    stage=_adjacent_stage(saved, forward=True),
                 )
             except WorkerAPIError as exc:
                 await interaction.response.send_message(
@@ -703,7 +1252,7 @@ class ProfileWizardDynamic(
             return
         if self.action == "skip-throne":
             try:
-                updated = await bot.require_worker().update_draft_step(
+                skipped = await bot.require_worker().update_draft_step(
                     draft.id,
                     step=DraftStepKey.THRONE,
                     owner_user_id=interaction.user.id,
@@ -713,9 +1262,45 @@ class ProfileWizardDynamic(
                         "preferred_payment_link_id": draft.document.preferred_payment_link_id,
                     },
                 )
+                updated = await bot.require_worker().set_draft_wizard_stage(
+                    skipped.id,
+                    owner_user_id=interaction.user.id,
+                    expected_revision=skipped.revision,
+                    stage=_adjacent_stage(skipped, forward=True),
+                )
             except WorkerAPIError as exc:
                 await interaction.response.send_message(
                     f"Bill could not skip Throne: {exc}", ephemeral=True
+                )
+                return
+            await interaction.response.edit_message(view=_wizard_for(interaction, updated))
+            return
+        if self.action == "check-throne":
+            try:
+                status = await bot.require_worker().get_throne_status(
+                    draft.id,
+                    owner_user_id=interaction.user.id,
+                    expected_revision=draft.revision,
+                )
+                if not status.verified:
+                    await interaction.response.send_message(
+                        "Throne has not confirmed the connection yet. Check that you saved the "
+                        "private webhook URL, run **Test Webhook** in Throne, then try "
+                        "**Check Connection** again.",
+                        ephemeral=True,
+                    )
+                    return
+                updated = await bot.require_worker().set_draft_wizard_stage(
+                    draft.id,
+                    owner_user_id=interaction.user.id,
+                    expected_revision=draft.revision,
+                    stage=WizardStage.THRONE,
+                    substep="verified",
+                )
+            except WorkerAPIError as exc:
+                await interaction.response.send_message(
+                    f"Bill could not check the Throne connection: {exc}",
+                    ephemeral=True,
                 )
                 return
             await interaction.response.edit_message(view=_wizard_for(interaction, updated))
@@ -725,17 +1310,12 @@ class ProfileWizardDynamic(
                 rotated = await bot.require_worker().rotate_throne(
                     draft.id, owner_user_id=interaction.user.id, expected_revision=draft.revision
                 )
-                updated = await bot.require_worker().update_draft_step(
+                updated = await bot.require_worker().set_draft_wizard_stage(
                     rotated.draft.id,
-                    step=DraftStepKey.THRONE,
                     owner_user_id=interaction.user.id,
                     expected_revision=rotated.draft.revision,
-                    values={
-                        "throne_creator_id": rotated.draft.document.throne_creator_id,
-                        "preferred_payment_link_id": (
-                            rotated.draft.document.preferred_payment_link_id
-                        ),
-                    },
+                    stage=WizardStage.THRONE,
+                    substep="awaiting_verification",
                 )
             except WorkerAPIError as exc:
                 await interaction.response.send_message(
@@ -745,8 +1325,7 @@ class ProfileWizardDynamic(
             await interaction.response.edit_message(view=_wizard_for(interaction, updated))
             if rotated.webhook_url:
                 await interaction.followup.send(
-                    "Your new private Throne webhook URL (save it now):\n"
-                    f"```text\n{rotated.webhook_url}\n```",
+                    _throne_webhook_instructions(rotated.webhook_url),
                     ephemeral=True,
                 )
             return
@@ -799,16 +1378,28 @@ class _ProfileSelectDynamic(
         draft = await _load_draft(
             bot, interaction, self.draft_id, self.owner, self.guild, self.revision
         )
-        if draft is None or not self.item.values:
+        if draft is None:
+            return
+        if not self.item.values and self.action not in {"honourifics", "labels"}:
+            await interaction.response.send_message(
+                "Choose an option before continuing.",
+                ephemeral=True,
+            )
             return
         if self.action == "orientation":
             try:
-                updated = await bot.require_worker().update_draft_step(
+                saved = await bot.require_worker().update_draft_step(
                     draft.id,
                     step=DraftStepKey.ORIENTATION,
                     owner_user_id=interaction.user.id,
                     expected_revision=draft.revision,
                     values={"orientation": Orientation(self.item.values[0]).value},
+                )
+                updated = await bot.require_worker().set_draft_wizard_stage(
+                    saved.id,
+                    owner_user_id=interaction.user.id,
+                    expected_revision=saved.revision,
+                    stage=WizardStage.PRONOUNS,
                 )
             except (ValueError, WorkerAPIError) as exc:
                 await interaction.response.send_message(
@@ -817,15 +1408,25 @@ class _ProfileSelectDynamic(
                 return
             await interaction.response.edit_message(view=_wizard_for(interaction, updated))
             return
-        if self.action.startswith("identity-"):
-            field = self.action.removeprefix("identity-")
+        if self.action in {
+            "pronouns",
+            "honourifics",
+            "labels",
+            "dm-status",
+            "profile-color",
+            "stats",
+        }:
             try:
                 updated = await bot.require_worker().update_draft_step(
                     draft.id,
                     step=DraftStepKey.IDENTITY,
                     owner_user_id=interaction.user.id,
                     expected_revision=draft.revision,
-                    values=_partial_identity_values(draft, field, tuple(self.item.values)),
+                    values=_partial_identity_values(
+                        draft,
+                        self.action,
+                        tuple(self.item.values),
+                    ),
                 )
             except (ValueError, WorkerAPIError) as exc:
                 await interaction.response.send_message(
@@ -889,84 +1490,6 @@ class _ProfileSelectDynamic(
 ProfileSelectDynamic = _ProfileSelectDynamic
 
 
-def _identity_values(
-    draft: ProfileDraft,
-    pronouns: str,
-    honourifics: str,
-    labels: str,
-    aliases: str,
-    stats_raw: str,
-    bio_raw: str,
-) -> dict[str, object]:
-    orientation = draft.governing_orientation
-    if orientation is None:
-        raise ValueError("choose an orientation first")
-    honourific_available, label_available, aliases_available, _, stats_available = _caps(
-        orientation
-    )
-    stats_raw = stats_raw.strip()
-    bio_raw = bio_raw.strip()
-    linked = (
-        draft.target_scope is DraftScope.SERVER and draft.server_mode is ServerProfileMode.LINKED
-    )
-    existing_overrides = set(draft.document.overridden_fields)
-    if linked and "dm_status" not in existing_overrides:
-        status = None
-    elif draft.document.dm_status is not None:
-        status = draft.document.dm_status.value
-    elif linked:
-        raise ValueError("choose a DM status or Use global setting from the menu")
-    else:
-        raise ValueError("choose a DM status from the menu before saving identity")
-    if stats_raw.casefold() == "inherit" and linked:
-        stats: bool | None = None
-    elif stats_raw.casefold() in {"on", "yes", "true"}:
-        stats = True
-    elif stats_raw.casefold() in {"off", "no", "false"}:
-        stats = False
-    else:
-        raise ValueError("stats must be on, off, or inherit")
-    bio_overridden = not linked or bool(bio_raw)
-    bio = None if bio_raw == "-" else (bio_raw or None)
-    parsed_pronouns = _csv(pronouns, PRONOUNS, "pronouns")
-    parsed_honourifics = (
-        _csv(honourifics, HONOURIFICS, "honourifics") if honourific_available else []
-    )
-    parsed_labels = _csv(labels, SUBMISSIVE_LABELS, "submissive labels") if label_available else []
-    parsed_aliases = (
-        []
-        if aliases.strip() == "-"
-        else [entry.strip() for entry in aliases.split(",") if entry.strip()]
-    )
-    values: dict[str, object] = {
-        "pronouns": parsed_pronouns,
-        "honourifics": parsed_honourifics,
-        "submissive_labels": parsed_labels,
-        "dm_status": status,
-        "bio": bio,
-        "public_send_stats": bool(stats) if stats_available else False,
-        "aliases": parsed_aliases if aliases_available else [],
-    }
-    if linked:
-        overrides: list[str] = []
-        if pronouns.strip() or "pronouns" in existing_overrides:
-            overrides.append("pronouns")
-        if honourific_available and (honourifics.strip() or "honourifics" in existing_overrides):
-            overrides.append("honourifics")
-        if label_available and (labels.strip() or "submissive_labels" in existing_overrides):
-            overrides.append("submissive_labels")
-        if "dm_status" in existing_overrides:
-            overrides.append("dm_status")
-        if bio_overridden:
-            overrides.append("bio")
-        if aliases_available and (aliases.strip() or "aliases" in existing_overrides):
-            overrides.append("aliases")
-        if stats_available and stats is not None:
-            overrides.append("public_send_stats")
-        values["overrides"] = overrides
-    return values
-
-
 def _partial_identity_values(
     draft: ProfileDraft,
     field: str,
@@ -988,6 +1511,8 @@ def _partial_identity_values(
     if not stats_available:
         overrides.discard("public_send_stats")
     status = draft.document.dm_status.value if draft.document.dm_status else None
+    profile_color = draft.document.profile_color
+    public_send_stats = draft.document.public_send_stats
     if field == "dm-status":
         if len(selected) != 1:
             raise ValueError("choose one DM status")
@@ -1012,6 +1537,42 @@ def _partial_identity_values(
                     "labels": "submissive_labels",
                 }[field]
             )
+    elif field == "profile-color":
+        if len(selected) != 1:
+            raise ValueError("choose one profile colour")
+        choice = selected[0]
+        if choice == "inherit":
+            if not linked:
+                raise ValueError("only linked profiles can inherit a profile colour")
+            profile_color = None
+            overrides.discard("profile_color")
+        elif choice == "none":
+            profile_color = None
+            if linked:
+                overrides.add("profile_color")
+        else:
+            try:
+                profile_color = int(choice, 16)
+            except ValueError as exc:
+                raise ValueError("choose a valid profile colour") from exc
+            if not 0 <= profile_color <= 0xFFFFFF:
+                raise ValueError("choose a valid profile colour")
+            if linked:
+                overrides.add("profile_color")
+    elif field == "stats":
+        if len(selected) != 1:
+            raise ValueError("choose one send-stat setting")
+        choice = selected[0]
+        if choice == "inherit":
+            if not linked:
+                raise ValueError("only linked profiles can inherit send stats")
+            overrides.discard("public_send_stats")
+        elif choice in {"show", "hide"}:
+            public_send_stats = choice == "show"
+            if linked:
+                overrides.add("public_send_stats")
+        else:
+            raise ValueError("choose a valid send-stat setting")
     else:
         raise ValueError("choose a valid identity field")
     pronouns = selected if field == "pronouns" else draft.document.selections.pronouns
@@ -1023,14 +1584,65 @@ def _partial_identity_values(
         "submissive_labels": list(labels),
         "dm_status": status,
         "bio": draft.document.bio,
-        "public_send_stats": draft.document.public_send_stats,
+        "public_send_stats": public_send_stats,
         "aliases": list(draft.document.aliases),
+        "profile_color": profile_color,
         "complete": False,
     }
     if field == "dm-status":
         values["dm_status_selected"] = True
     if linked:
         values["overrides"] = sorted(overrides)
+    return values
+
+
+def _identity_step_values(
+    draft: ProfileDraft,
+    *,
+    complete: bool,
+) -> dict[str, object]:
+    values: dict[str, object] = {
+        "pronouns": list(draft.document.selections.pronouns),
+        "honourifics": list(draft.document.selections.honourifics),
+        "submissive_labels": list(draft.document.selections.submissive_labels),
+        "dm_status": draft.document.dm_status.value if draft.document.dm_status else None,
+        "bio": draft.document.bio,
+        "public_send_stats": draft.document.public_send_stats,
+        "aliases": list(draft.document.aliases),
+        "profile_color": draft.document.profile_color,
+        "complete": complete,
+    }
+    if _is_linked(draft):
+        values["overrides"] = list(draft.document.overridden_fields)
+    return values
+
+
+def _inherit_current_values(draft: ProfileDraft) -> dict[str, object]:
+    if not _is_linked(draft):
+        raise ValueError("only linked server profiles can use a global setting")
+    values = _identity_step_values(draft, complete=False)
+    overrides = set(draft.document.overridden_fields)
+    stage = _stage(draft)
+    if stage is WizardStage.PRONOUNS:
+        values["pronouns"] = []
+        overrides.discard("pronouns")
+    elif stage is WizardStage.HONOURIFICS:
+        values["honourifics"] = []
+        overrides.discard("honourifics")
+    elif stage is WizardStage.SUBMISSIVE_LABELS:
+        values["submissive_labels"] = []
+        overrides.discard("submissive_labels")
+    elif stage is WizardStage.BIO:
+        values["bio"] = None
+        overrides.discard("bio")
+    elif stage is WizardStage.DETAILS:
+        values["aliases"] = []
+        values["public_send_stats"] = False
+        overrides.discard("aliases")
+        overrides.discard("public_send_stats")
+    else:
+        raise ValueError("this screen has its own global-setting choice")
+    values["overrides"] = sorted(overrides)
     return values
 
 
@@ -1147,44 +1759,91 @@ class InheritedLinkVisibilityView(discord.ui.View):
         await self.save(interaction, ())
 
 
-class IdentityModal(discord.ui.Modal, title="Profile identity"):
+def _throne_webhook_instructions(webhook_url: str) -> str:
+    return (
+        "Your private Throne webhook URL is shown once below. Do not share it.\n\n"
+        "1. Open your Throne creator settings.\n"
+        "2. Find the webhooks section.\n"
+        "3. Paste this URL and save it.\n"
+        "4. Run **Test Webhook** in Throne.\n"
+        "5. Return to Bill and press **Check Connection**.\n"
+        f"```text\n{webhook_url}\n```"
+    )
+
+
+class BioModal(discord.ui.Modal, title="Profile bio"):
     def __init__(self, draft: ProfileDraft, message: discord.Message) -> None:
         super().__init__()
         self.draft, self.message = draft, message
-        self.aliases = discord.ui.TextInput(
-            label="Aliases, comma separated (- clears)",
-            default=", ".join(draft.document.aliases),
-            required=False,
-            max_length=200,
-        )
-        linked = (
-            draft.target_scope is DraftScope.SERVER
-            and draft.server_mode is ServerProfileMode.LINKED
-        )
-        overridden = set(draft.document.overridden_fields)
-        stats_default = (
-            "inherit"
-            if linked and "public_send_stats" not in overridden
-            else ("on" if draft.document.public_send_stats else "off")
-        )
-        bio_default = (draft.document.bio or "-") if not linked or "bio" in overridden else ""
-        self.stats = discord.ui.TextInput(
-            label="Public send stats: on/off/inherit",
-            default=stats_default,
-            required=True,
-            max_length=7,
-        )
         self.bio = discord.ui.TextInput(
-            label="Bio (- clears; blank inherits when linked)",
-            default=bio_default,
+            label="Public bio",
+            default=draft.document.bio or "",
             required=False,
             max_length=300,
             style=discord.TextStyle.paragraph,
         )
-        for field in (self.aliases, self.stats, self.bio):
-            self.add_item(field)
+        self.add_item(self.bio)
 
     async def on_submit(self, interaction: discord.Interaction[discord.Client]) -> None:
+        await interaction.response.defer(ephemeral=True)
+        bot = cast("BillBot", interaction.client)
+        overrides = set(self.draft.document.overridden_fields)
+        value = self.bio.value.strip() or None
+        if _is_linked(self.draft):
+            overrides.add("bio")
+        values = _identity_step_values(self.draft, complete=False)
+        values["bio"] = value
+        if _is_linked(self.draft):
+            values["overrides"] = sorted(overrides)
+        try:
+            saved = await bot.require_worker().update_draft_step(
+                self.draft.id,
+                step=DraftStepKey.IDENTITY,
+                owner_user_id=interaction.user.id,
+                expected_revision=self.draft.revision,
+                values=values,
+            )
+            updated = await bot.require_worker().set_draft_wizard_stage(
+                saved.id,
+                owner_user_id=interaction.user.id,
+                expected_revision=saved.revision,
+                stage=_adjacent_stage(saved, forward=True),
+            )
+        except WorkerAPIError as exc:
+            await interaction.followup.send(f"Bill could not save that bio: {exc}", ephemeral=True)
+            return
+        await self.message.edit(view=_wizard_for(interaction, updated))
+        await interaction.followup.send("Bio saved.", ephemeral=True)
+
+
+class AliasModal(discord.ui.Modal, title="Profile aliases"):
+    def __init__(self, draft: ProfileDraft, message: discord.Message) -> None:
+        super().__init__()
+        self.draft, self.message = draft, message
+        self.aliases = discord.ui.TextInput(
+            label="Aliases, one per line",
+            default="\n".join(draft.document.aliases),
+            required=False,
+            max_length=300,
+            style=discord.TextStyle.paragraph,
+        )
+        self.add_item(self.aliases)
+
+    async def on_submit(self, interaction: discord.Interaction[discord.Client]) -> None:
+        await interaction.response.defer(ephemeral=True)
+        aliases = tuple(
+            dict.fromkeys(
+                line.strip()
+                for line in self.aliases.value.splitlines()
+                if line.strip()
+            )
+        )
+        values = _identity_step_values(self.draft, complete=False)
+        values["aliases"] = list(aliases)
+        if _is_linked(self.draft):
+            overrides = set(self.draft.document.overridden_fields)
+            overrides.add("aliases")
+            values["overrides"] = sorted(overrides)
         bot = cast("BillBot", interaction.client)
         try:
             updated = await bot.require_worker().update_draft_step(
@@ -1192,42 +1851,92 @@ class IdentityModal(discord.ui.Modal, title="Profile identity"):
                 step=DraftStepKey.IDENTITY,
                 owner_user_id=interaction.user.id,
                 expected_revision=self.draft.revision,
-                values=_identity_values(
-                    self.draft,
-                    ", ".join(self.draft.document.selections.pronouns),
-                    ", ".join(self.draft.document.selections.honourifics),
-                    ", ".join(self.draft.document.selections.submissive_labels),
-                    self.aliases.value,
-                    self.stats.value,
-                    self.bio.value,
-                ),
+                values=values,
             )
-        except (ValueError, WorkerAPIError) as exc:
-            await interaction.response.send_message(
-                f"Bill could not save identity: {exc}", ephemeral=True
+        except WorkerAPIError as exc:
+            await interaction.followup.send(
+                f"Bill could not save those aliases: {exc}",
+                ephemeral=True,
             )
             return
         await self.message.edit(view=_wizard_for(interaction, updated))
-        await interaction.response.send_message("Identity saved.", ephemeral=True)
+        await interaction.followup.send("Aliases saved.", ephemeral=True)
+
+
+class ProfileColorModal(discord.ui.Modal, title="Custom profile colour"):
+    def __init__(self, draft: ProfileDraft, message: discord.Message) -> None:
+        super().__init__()
+        self.draft, self.message = draft, message
+        default = (
+            f"#{draft.document.profile_color:06X}"
+            if draft.document.profile_color is not None
+            else ""
+        )
+        self.color = discord.ui.TextInput(
+            label="Hex colour (#RRGGBB or RRGGBB)",
+            default=default,
+            min_length=6,
+            max_length=7,
+        )
+        self.add_item(self.color)
+
+    async def on_submit(self, interaction: discord.Interaction[discord.Client]) -> None:
+        value = self.color.value.strip()
+        if re.fullmatch(r"#?[0-9A-Fa-f]{6}", value) is None:
+            await interaction.response.send_message(
+                "Enter exactly six hexadecimal digits, with an optional leading `#`.",
+                ephemeral=True,
+            )
+            return
+        color = int(value.removeprefix("#"), 16)
+        values = _identity_step_values(self.draft, complete=False)
+        values["profile_color"] = color
+        if _is_linked(self.draft):
+            overrides = set(self.draft.document.overridden_fields)
+            overrides.add("profile_color")
+            values["overrides"] = sorted(overrides)
+        await interaction.response.defer(ephemeral=True)
+        bot = cast("BillBot", interaction.client)
+        try:
+            updated = await bot.require_worker().update_draft_step(
+                self.draft.id,
+                step=DraftStepKey.IDENTITY,
+                owner_user_id=interaction.user.id,
+                expected_revision=self.draft.revision,
+                values=values,
+            )
+        except WorkerAPIError as exc:
+            await interaction.followup.send(
+                f"Bill could not save that colour: {exc}",
+                ephemeral=True,
+            )
+            return
+        await self.message.edit(view=_wizard_for(interaction, updated))
+        await interaction.followup.send(f"Saved custom colour **#{color:06X}**.", ephemeral=True)
 
 
 class LinkModal(discord.ui.Modal, title="Add a profile link"):
     def __init__(
-        self, draft: ProfileDraft, message: discord.Message, link_id: str | None = None
+        self,
+        draft: ProfileDraft,
+        message: discord.Message,
+        *,
+        link_type: LinkType,
+        link_id: str | None = None,
     ) -> None:
         super().__init__()
-        self.draft, self.message, self.link_id = draft, message, link_id
+        self.draft, self.message, self.link_id, self.link_type = (
+            draft,
+            message,
+            link_id,
+            link_type,
+        )
         link = next((item for item in draft.document.links if item.id == link_id), None)
         self.label = discord.ui.TextInput(
             label="Public label", default=link.public_label if link else "", max_length=40
         )
         self.url = discord.ui.TextInput(
             label="HTTPS URL", default=link.normalized_url if link else "", max_length=500
-        )
-        self.kind = discord.ui.TextInput(
-            label="Type: social or payment",
-            default=link.link_type.value if link else "social",
-            max_length=7,
         )
         self.platform = discord.ui.TextInput(
             label="Platform (optional)",
@@ -1237,19 +1946,18 @@ class LinkModal(discord.ui.Modal, title="Add a profile link"):
         )
         self.add_item(self.label)
         self.add_item(self.url)
-        self.add_item(self.kind)
         self.add_item(self.platform)
 
     async def on_submit(self, interaction: discord.Interaction[discord.Client]) -> None:
+        await interaction.response.defer(ephemeral=True)
         bot = cast("BillBot", interaction.client)
         try:
-            kind = LinkType(self.kind.value.strip().casefold())
             common = {
                 "owner_user_id": interaction.user.id,
                 "expected_revision": self.draft.revision,
                 "public_label": self.label.value,
                 "normalized_url": self.url.value,
-                "link_type": kind,
+                "link_type": self.link_type,
                 "platform": self.platform.value or None,
             }
             updated = await (
@@ -1258,13 +1966,13 @@ class LinkModal(discord.ui.Modal, title="Add a profile link"):
                 else bot.require_worker().add_link(self.draft.id, **common)
             )
         except (ValueError, WorkerAPIError) as exc:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"Bill could not save that link: {exc}", ephemeral=True
             )
             return
         await self.message.edit(view=_wizard_for(interaction, updated))
-        await interaction.response.send_message(
-            "Link saved. Choose **Done** when your links are ready.", ephemeral=True
+        await interaction.followup.send(
+            "Link saved. Choose **Continue** when your links are ready.", ephemeral=True
         )
 
 
@@ -1278,6 +1986,7 @@ class LinkImportModal(discord.ui.Modal, title="Import a link page"):
         self.add_item(self.url)
 
     async def on_submit(self, interaction: discord.Interaction[discord.Client]) -> None:
+        await interaction.response.defer(ephemeral=True)
         bot = cast("BillBot", interaction.client)
         try:
             result = await bot.require_worker().create_link_import(
@@ -1287,7 +1996,7 @@ class LinkImportModal(discord.ui.Modal, title="Import a link page"):
                 source_url=self.url.value,
             )
         except WorkerAPIError as exc:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"Bill could not import that page: {exc}", ephemeral=True
             )
             return
@@ -1299,7 +2008,7 @@ class LinkImportModal(discord.ui.Modal, title="Import a link page"):
             )
             or "No public links found"
         )
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"Imported candidates: {labels}",
             view=ImportConfirmView(
                 result.draft,
@@ -1408,7 +2117,15 @@ class LinkManagerView(discord.ui.View):
     async def edit(
         self, interaction: discord.Interaction[discord.Client], _: discord.ui.Button
     ) -> None:
-        await interaction.response.send_modal(LinkModal(self.draft, self.message, self.link_id))
+        link = next(item for item in self.draft.document.links if item.id == self.link_id)
+        await interaction.response.send_modal(
+            LinkModal(
+                self.draft,
+                self.message,
+                link_type=link.link_type,
+                link_id=self.link_id,
+            )
+        )
 
     @discord.ui.button(label="Remove", style=discord.ButtonStyle.danger)
     async def remove(

@@ -1,0 +1,1230 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+resolve_script_path() {
+  local source_path="${BASH_SOURCE[0]}"
+  while [[ -L "${source_path}" ]]; do
+    local source_dir
+    source_dir="$(cd -P "$(dirname "${source_path}")" && pwd)"
+    source_path="$(readlink "${source_path}")"
+    [[ "${source_path}" != /* ]] && source_path="${source_dir}/${source_path}"
+  done
+  printf '%s\n' "${source_path}"
+}
+
+SCRIPT_PATH="$(resolve_script_path)"
+SCRIPT_DIR="$(cd -P "$(dirname "${SCRIPT_PATH}")" && pwd)"
+# Walk up from this CLI's location (ops/cli/) to the app root — the dir that
+# holds pyproject.toml + .env + deploy/. Resolved by marker rather than a fixed
+# depth so relocating the CLI can't silently break .env loading again.
+APP_ROOT="${SCRIPT_DIR}"
+while [[ "${APP_ROOT}" != "/" && ! -f "${APP_ROOT}/pyproject.toml" ]]; do
+  APP_ROOT="$(dirname "${APP_ROOT}")"
+done
+
+ROB_BOT_SERVICE="${ROB_BOT_SERVICE:-rob-bot.service}"
+ROB_WEBHOOK_SERVICE="${ROB_WEBHOOK_SERVICE:-rob-webhook.service}"
+ROB_LOG_LINES="${ROB_LOG_LINES:-100}"
+GUILD_ID=""
+declare -a REMAINING_ARGS=()
+declare -a LOCAL_SERVICES=()
+declare -a SERVICE_TARGETS=()
+
+die() {
+  printf 'rob: %s\n' "$*" >&2
+  exit 1
+}
+
+warn() {
+  printf 'rob: warning: %s\n' "$*" >&2
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+load_env_file() {
+  local env_file="$1"
+  local line=""
+  local line_no=0
+
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line_no=$((line_no + 1))
+    line="${line%$'\r'}"
+
+    [[ -z "${line//[[:space:]]/}" ]] && continue
+    [[ "${line}" =~ ^[[:space:]]*# ]] && continue
+
+    if [[ "${line}" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      local key="${BASH_REMATCH[2]}"
+      local value="${BASH_REMATCH[3]}"
+      value="${value#"${value%%[![:space:]]*}"}"
+
+      if [[ ! "${value}" =~ ^\".*\"$ && ! "${value}" =~ ^\'.*\'$ ]]; then
+        value="$(printf '%s' "${value}" | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//')"
+      fi
+
+      export "${key}=${value}"
+      continue
+    fi
+
+    warn "invalid .env syntax on line ${line_no}; ignoring: ${line}"
+  done < "${env_file}"
+}
+
+if [[ -f "${APP_ROOT}/.env" ]]; then
+  load_env_file "${APP_ROOT}/.env"
+fi
+
+usage() {
+  cat <<'EOF'
+Rob Control
+
+Usage:
+  rob dommes add <discord_user_id> <throne_input> --guild <guild_id>
+  rob dommes remove <domme_lookup> --guild <guild_id>
+  rob dommes list --guild <guild_id>
+
+  rob subs add <discord_user_id> <send_name_1> [send_name_2] [send_name_3] --guild <guild_id>
+  rob subs remove <sub_lookup> --guild <guild_id>
+  rob subs list --guild <guild_id>
+
+  rob sends <domme_lookup> --guild <guild_id>
+  rob send add <domme_lookup> <amount> [sub_send_name] --guild <guild_id>
+  rob send remove <domme_lookup> <send_id> --guild <guild_id>
+  rob send update <throneuser> <sendid> <newamount> --message <messageid> --reason <reason> --guild <guild_id>
+
+  rob count set <number> --guild <guild_id>
+  rob count status --guild <guild_id>
+  rob scan --guild <guild_id>
+  rob auto-apply --guild <guild_id> [all|channels|roles|field_a,field_b]
+  rob set-channel --guild <guild_id> --field <field> --channel-id <id> [--clear]
+  rob set-role --guild <guild_id> --field <field> --role-id <id> [--clear]
+
+  rob inactivity on|off|status --guild <guild_id>
+  rob inactivity backfill --guild <guild_id> [--days <n>]
+  rob backup on|off|status|run --guild <guild_id>
+  rob migration audit --guild <guild_id>
+  rob webhook preview --guild <guild_id>
+  rob webhook send --guild <guild_id> --all [--limit <n>]
+  rob webhook send --guild <guild_id> --discord-user-id <id>
+  rob webhook refresh <thronehandle> [--guild <guild_id>]
+  rob clear rob_dev_v2
+
+  rob block <discord_user_id>
+  rob unblock <discord_user_id>
+  rob restart [bot|webhook|all]
+  rob maintenance on [reason...]
+  rob maintenance off
+  rob maintenance status
+  rob offline on
+  rob offline off
+  rob offline status
+  rob logs [bot|webhook|all]
+  rob status
+  rob fix-me [--dry-run] [--rotate-secret] [--yes]
+
+Notes:
+  - Guild-scoped commands accept --guild or --guild-id.
+  - ROB_DEFAULT_GUILD_ID or DISCORD_GUILD_ID can be used as a fallback. If
+    neither is set and exactly one guild is configured, it is auto-detected,
+    so --guild can be omitted on a single-guild (e.g. test) server.
+  - rob status shows the ops URL, DB, auto-detected guild, ops health, and
+    local service states.
+  - rob fix-me prepares one host to run both the bot and webhook over loopback
+    (DB stays remote); see deploy/scripts/fix-me.sh --help.
+  - Send additions/removals are approval-gated: the target Dom/me must approve
+    them in Discord before Rob changes tracked totals.
+  - rob clear rob_dev_v2 only prints SQL. It does not execute it.
+EOF
+}
+
+require_database_url() {
+  [[ -n "${DATABASE_URL:-}" ]] || die "DATABASE_URL is required for database-backed commands."
+}
+
+trim_trailing_slash() {
+  local value="$1"
+  printf '%s' "${value%/}"
+}
+
+resolve_ops_base_url() {
+  local base="${ROB_OPS_BASE_URL:-}"
+  if [[ -z "${base}" && -n "${ROB_BOT_NOTIFY_URL:-}" ]]; then
+    base="$(printf '%s' "${ROB_BOT_NOTIFY_URL}" | sed -E 's#^(https?://[^/]+).*$#\1#')"
+  fi
+  if [[ -z "${base}" ]]; then
+    local host="${ROB_OPS_HOST:-127.0.0.1}"
+    local port="${ROB_OPS_PORT:-8811}"
+    base="http://${host}:${port}"
+  fi
+  trim_trailing_slash "${base}"
+}
+
+request_actor() {
+  if [[ -n "${ROB_ACTOR_NAME:-}" ]]; then
+    printf '%s' "${ROB_ACTOR_NAME}"
+    return
+  fi
+  local user_name
+  user_name="${USER:-$(id -un 2>/dev/null || echo unknown)}"
+  case "${user_name}" in
+    pfaint)
+      printf 'Pat'
+      ;;
+    *)
+      printf '%s' "${user_name}"
+      ;;
+  esac
+}
+
+http_request() {
+  local method="$1"
+  local path="$2"
+  shift 2
+
+  require_cmd curl
+
+  local url
+  url="$(resolve_ops_base_url)${path}"
+  local -a args
+  args=(-sS --connect-timeout 5 -X "${method}" -w $'\n%{http_code}')
+
+  if [[ -n "${ROB_OPS_SECRET:-}" ]]; then
+    args+=(-H "X-Rob-Ops-Secret: ${ROB_OPS_SECRET}")
+  fi
+
+  while (($#)); do
+    args+=(--data-urlencode "$1")
+    shift
+  done
+  args+=("${url}")
+
+  local response
+  response="$(curl "${args[@]}")"
+  local status="${response##*$'\n'}"
+  local body="${response%$'\n'*}"
+
+  if [[ ! "${status}" =~ ^2[0-9][0-9]$ ]]; then
+    if [[ -n "${body}" ]]; then
+      printf '%s\n' "${body}" >&2
+    fi
+    die "request failed (${status}) for ${method} ${path}"
+  fi
+
+  printf '%s\n' "${body}"
+}
+
+ops_get() {
+  http_request GET "$1"
+}
+
+ops_post_form() {
+  local path="$1"
+  shift
+  http_request POST "${path}" "$@"
+}
+
+autodetect_guild_id() {
+  # Echo the single configured guild id when exactly one exists, else nothing.
+  # Used as a fallback so guild-scoped commands can be run flagless on a
+  # one-guild (e.g. test) server. Never fails the caller.
+  [[ -n "${DATABASE_URL:-}" ]] || return 0
+  command -v psql >/dev/null 2>&1 || return 0
+
+  local out
+  out="$(psql "${DATABASE_URL}" -X -A -t -P pager=off \
+    -c 'SELECT guild_id FROM vib_settings' 2>/dev/null || true)"
+  out="$(printf '%s\n' "${out}" | sed '/^[[:space:]]*$/d')"
+
+  local count
+  count="$(printf '%s\n' "${out}" | grep -c . || true)"
+  if [[ "${count}" -eq 1 ]]; then
+    printf '%s' "${out}"
+  fi
+}
+
+collect_guild_option() {
+  GUILD_ID="${ROB_DEFAULT_GUILD_ID:-${DISCORD_GUILD_ID:-}}"
+  REMAINING_ARGS=()
+
+  while (($#)); do
+    case "$1" in
+      --guild|--guild-id)
+        shift
+        (($#)) || die "missing value for --guild"
+        GUILD_ID="$1"
+        ;;
+      --guild=*|--guild-id=*)
+        GUILD_ID="${1#*=}"
+        ;;
+      *)
+        REMAINING_ARGS+=("$1")
+        ;;
+    esac
+    shift || true
+  done
+
+  if [[ -z "${GUILD_ID}" ]]; then
+    GUILD_ID="$(autodetect_guild_id)"
+    if [[ -n "${GUILD_ID}" ]]; then
+      warn "no --guild given; using the only configured guild: ${GUILD_ID}"
+    fi
+  fi
+
+  [[ -n "${GUILD_ID}" ]] || die "this command requires --guild <guild_id> (or set ROB_DEFAULT_GUILD_ID; a single configured guild is auto-detected)."
+  [[ "${GUILD_ID}" =~ ^[0-9]+$ ]] || die "guild id must be numeric."
+}
+
+psql_query() {
+  local sql="$1"
+  shift
+
+  require_database_url
+  require_cmd psql
+
+  local -a args
+  args=(
+    -X
+    -A
+    -F $'\t'
+    -P footer=off
+    -P null=-
+    -v ON_ERROR_STOP=1
+  )
+  while (($#)); do
+    args+=(-v "$1")
+    shift
+  done
+  psql "${DATABASE_URL}" "${args[@]}" -c "${sql}"
+}
+
+sql_quote_literal() {
+  local value="$1"
+  value="${value//\'/\'\'}"
+  printf "'%s'" "${value}"
+}
+
+database_name_from_url() {
+  require_database_url
+  local cleaned="${DATABASE_URL%%\?*}"
+  cleaned="${cleaned##*/}"
+  printf '%s' "${cleaned}"
+}
+
+print_table() {
+  if command -v column >/dev/null 2>&1; then
+    column -t -s $'\t'
+  else
+    cat
+  fi
+}
+
+print_heading() {
+  local title="$1"
+  printf '%s\n' "${title}"
+  printf '%*s\n' "${#title}" '' | tr ' ' '='
+}
+
+count_rows() {
+  local rows="$1"
+  if [[ -z "${rows}" ]]; then
+    printf '0'
+    return
+  fi
+  awk 'END { print NR }' <<< "${rows}"
+}
+
+require_local_services() {
+  LOCAL_SERVICES=()
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl cat "${ROB_BOT_SERVICE}" >/dev/null 2>&1; then
+      LOCAL_SERVICES+=("${ROB_BOT_SERVICE}")
+    fi
+    if systemctl cat "${ROB_WEBHOOK_SERVICE}" >/dev/null 2>&1; then
+      LOCAL_SERVICES+=("${ROB_WEBHOOK_SERVICE}")
+    fi
+  fi
+  ((${#LOCAL_SERVICES[@]} > 0)) || die "no local Rob systemd services were found."
+}
+
+services_for_target() {
+  local target="${1:-all}"
+  require_local_services
+
+  SERVICE_TARGETS=()
+  case "${target}" in
+    bot)
+      systemctl cat "${ROB_BOT_SERVICE}" >/dev/null 2>&1 || die "bot service not found: ${ROB_BOT_SERVICE}"
+      SERVICE_TARGETS=("${ROB_BOT_SERVICE}")
+      ;;
+    webhook)
+      systemctl cat "${ROB_WEBHOOK_SERVICE}" >/dev/null 2>&1 || die "webhook service not found: ${ROB_WEBHOOK_SERVICE}"
+      SERVICE_TARGETS=("${ROB_WEBHOOK_SERVICE}")
+      ;;
+    all|"")
+      SERVICE_TARGETS=("${LOCAL_SERVICES[@]}")
+      ;;
+    *)
+      die "unknown service target: ${target}"
+      ;;
+  esac
+}
+
+amount_to_cents() {
+  local amount="$1"
+  local cents
+  cents="$(
+    awk -v value="${amount}" '
+      BEGIN {
+        if (value !~ /^[0-9]+([.][0-9]{1,2})?$/) {
+          exit 1
+        }
+        printf "%.0f", value * 100
+      }
+    '
+  )" || die "amount must be a positive number with up to 2 decimal places."
+
+  [[ "${cents}" =~ ^[0-9]+$ ]] || die "amount must resolve to whole cents."
+  printf '%s' "${cents}"
+}
+
+dommes_command() {
+  local action="${1:-}"
+  shift || true
+
+  case "${action}" in
+    add)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      [[ $# -eq 2 ]] || die "usage: rob dommes add <discord_user_id> <throne_input> --guild <guild_id>"
+      [[ "$1" =~ ^[0-9]+$ ]] || die "discord_user_id must be numeric."
+      ops_post_form \
+        "/guilds/${GUILD_ID}/dommes?format=text" \
+        "discord_user_id=$1" \
+        "throne_input=$2"
+      ;;
+    remove)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      [[ $# -eq 1 ]] || die "usage: rob dommes remove <domme_lookup> --guild <guild_id>"
+      ops_post_form "/guilds/${GUILD_ID}/dommes/remove?format=text" "target=$1"
+      ;;
+    list)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      [[ $# -eq 0 ]] || die "usage: rob dommes list --guild <guild_id>"
+      local rows
+      rows="$(
+        psql_query \
+          "SELECT discord_user_id, COALESCE(public_display_name, '-') AS public_display_name, COALESCE(throne_handle, '-') AS throne_handle, tracking_status, profile_status FROM dommes WHERE guild_id = ${GUILD_ID} ORDER BY registered_at ASC, discord_user_id ASC"
+      )"
+      if [[ -z "${rows}" ]]; then
+        printf 'No Dom/mes found for guild %s.\n' "${GUILD_ID}"
+        return
+      fi
+      print_heading "Dom/me List"
+      printf 'Guild ID: %s\n' "${GUILD_ID}"
+      printf 'Total Registered: %s\n\n' "$(count_rows "${rows}")"
+      {
+        printf 'discord_user_id\tpublic_name\tthrone_handle\ttracking\tprofile\n'
+        printf '%s\n' "${rows}"
+      } | print_table
+      ;;
+    *)
+      die "usage: rob dommes add|remove|list ..."
+      ;;
+  esac
+}
+
+subs_command() {
+  local action="${1:-}"
+  shift || true
+
+  case "${action}" in
+    add)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      (( $# >= 2 && $# <= 4 )) || die "usage: rob subs add <discord_user_id> <send_name_1> [send_name_2] [send_name_3] --guild <guild_id>"
+      [[ "$1" =~ ^[0-9]+$ ]] || die "discord_user_id must be numeric."
+      local discord_user_id="$1"
+      shift
+      local send_names
+      send_names="$(IFS=,; printf '%s' "$*")"
+      ops_post_form \
+        "/guilds/${GUILD_ID}/subs?format=text" \
+        "discord_user_id=${discord_user_id}" \
+        "send_names=${send_names}"
+      ;;
+    remove)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      [[ $# -eq 1 ]] || die "usage: rob subs remove <sub_lookup> --guild <guild_id>"
+      ops_post_form "/guilds/${GUILD_ID}/subs/remove?format=text" "target=$1"
+      ;;
+    list)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      [[ $# -eq 0 ]] || die "usage: rob subs list --guild <guild_id>"
+      local rows
+      rows="$(
+        psql_query \
+          "SELECT s.discord_user_id, s.send_name AS primary_send_name, COALESCE(string_agg(ssn.send_name, ', ' ORDER BY ssn.is_primary DESC, lower(ssn.send_name)), s.send_name) AS registered_send_names FROM subs s LEFT JOIN sub_send_names ssn ON ssn.guild_id = s.guild_id AND ssn.sub_id = s.id WHERE s.guild_id = ${GUILD_ID} GROUP BY s.id ORDER BY s.registered_at ASC, lower(s.send_name) ASC"
+      )"
+      if [[ -z "${rows}" ]]; then
+        printf 'No Subs found for guild %s.\n' "${GUILD_ID}"
+        return
+      fi
+      print_heading "Sub List"
+      printf 'Guild ID: %s\n' "${GUILD_ID}"
+      printf 'Total Registered: %s\n\n' "$(count_rows "${rows}")"
+      {
+        printf 'discord_user_id\tprimary_name\tregistered_names\n'
+        printf '%s\n' "${rows}"
+      } | print_table
+      ;;
+    *)
+      die "usage: rob subs add|remove|list ..."
+      ;;
+  esac
+}
+
+sends_lookup_command() {
+  collect_guild_option "$@"
+  if ((${#REMAINING_ARGS[@]})); then
+    set -- "${REMAINING_ARGS[@]}"
+  else
+    set --
+  fi
+  [[ $# -eq 1 ]] || die "usage: rob sends <domme_lookup> --guild <guild_id>"
+  local lookup_sql
+  lookup_sql="$(sql_quote_literal "$1")"
+
+  local rows
+  rows="$(
+    psql_query \
+      "SELECT s.id, to_char(s.sent_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') || 'Z' AS sent_at_utc, s.currency || ' ' || to_char((s.amount_cents::numeric / 100.0), 'FM999999990.00') AS amount, COALESCE(s.sub_name, '-') AS sub_name, s.source, s.discord_post_status FROM sends s JOIN dommes d ON d.guild_id = s.guild_id AND d.discord_user_id = s.domme_user_id WHERE s.guild_id = ${GUILD_ID} AND (d.discord_user_id::text = ${lookup_sql} OR lower(COALESCE(d.throne_handle, '')) = lower(${lookup_sql}) OR lower(COALESCE(d.public_display_name, '')) = lower(${lookup_sql})) ORDER BY s.sent_at DESC, s.id DESC LIMIT 50"
+  )"
+
+  if [[ -z "${rows}" ]]; then
+    printf 'No tracked sends found for %s in guild %s.\n' "$1" "${GUILD_ID}"
+    return
+  fi
+
+  print_heading "Recent Sends"
+  printf 'Guild ID: %s\n' "${GUILD_ID}"
+  printf 'Dom/me Lookup: %s\n' "$1"
+  printf 'Rows Shown: %s\n\n' "$(count_rows "${rows}")"
+  {
+    printf 'send_id\tsent_at_utc\tamount\tsub_name\tsource\tstatus\n'
+    printf '%s\n' "${rows}"
+  } | print_table
+}
+
+send_command() {
+  local action="${1:-}"
+  shift || true
+
+  case "${action}" in
+    add)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      (( $# == 2 || $# == 3 )) || die "usage: rob send add <domme_lookup> <amount> [sub_send_name] --guild <guild_id>"
+      local domme_lookup="$1"
+      amount_to_cents "$2" >/dev/null
+      local response
+      if [[ $# -eq 3 ]]; then
+        response="$(
+          ops_post_form \
+            "/guilds/${GUILD_ID}/send-requests/add?format=text" \
+            "domme_lookup=${domme_lookup}" \
+            "amount=${2}" \
+            "sub_name=${3}" \
+            "requested_by=$(request_actor)"
+        )"
+      else
+        response="$(
+          ops_post_form \
+            "/guilds/${GUILD_ID}/send-requests/add?format=text" \
+            "domme_lookup=${domme_lookup}" \
+            "amount=${2}" \
+            "requested_by=$(request_actor)"
+        )"
+      fi
+      printf '%s\n' "${response}"
+      ;;
+    remove)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      [[ $# -eq 2 ]] || die "usage: rob send remove <domme_lookup> <send_id> --guild <guild_id>"
+      [[ "$2" =~ ^[0-9]+$ ]] || die "send_id must be numeric."
+      ops_post_form \
+        "/guilds/${GUILD_ID}/send-requests/remove?format=text" \
+        "domme_lookup=$1" \
+        "send_id=$2" \
+        "requested_by=$(request_actor)"
+      ;;
+    update)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      [[ $# -ge 3 ]] || die "usage: rob send update <throneuser> <sendid> <newamount> --message <messageid> --reason <reason> --guild <guild_id>"
+      local domme_lookup="$1"
+      local send_id="$2"
+      local new_amount="$3"
+      shift 3
+      [[ "${send_id}" =~ ^[0-9]+$ ]] || die "sendid must be numeric."
+      amount_to_cents "${new_amount}" >/dev/null
+
+      local message_id=""
+      local reason=""
+      while (($#)); do
+        case "$1" in
+          --message)
+            shift
+            (($#)) || die "missing value for --message"
+            message_id="$1"
+            ;;
+          --message=*)
+            message_id="${1#*=}"
+            ;;
+          --reason)
+            shift
+            (($#)) || die "missing value for --reason"
+            reason="$1"
+            ;;
+          --reason=*)
+            reason="${1#*=}"
+            ;;
+          *)
+            die "unknown option for rob send update: $1"
+            ;;
+        esac
+        shift || true
+      done
+
+      [[ "${message_id}" =~ ^[0-9]+$ ]] || die "messageid must be numeric."
+      [[ -n "${reason}" ]] || die "reason is required."
+      ops_post_form \
+        "/guilds/${GUILD_ID}/send-requests/update?format=text" \
+        "domme_lookup=${domme_lookup}" \
+        "send_id=${send_id}" \
+        "amount=${new_amount}" \
+        "message_id=${message_id}" \
+        "reason=${reason}" \
+        "requested_by=$(request_actor)"
+      ;;
+    *)
+      die "usage: rob send add|remove|update ..."
+      ;;
+  esac
+}
+
+count_command() {
+  local action="${1:-}"
+  shift || true
+
+  case "${action}" in
+    set)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      [[ $# -eq 1 ]] || die "usage: rob count set <number> --guild <guild_id>"
+      [[ "$1" =~ ^[0-9]+$ ]] || die "count must be numeric."
+      ops_post_form "/guilds/${GUILD_ID}/count?format=text" "number=$1"
+      ;;
+    status)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      [[ $# -eq 0 ]] || die "usage: rob count status --guild <guild_id>"
+      ops_get "/guilds/${GUILD_ID}/count?format=text"
+      ;;
+    *)
+      die "usage: rob count set|status ..."
+      ;;
+  esac
+}
+
+scan_command() {
+  collect_guild_option "$@"
+  if ((${#REMAINING_ARGS[@]})); then
+    set -- "${REMAINING_ARGS[@]}"
+  else
+    set --
+  fi
+  [[ $# -eq 0 ]] || die "usage: rob scan --guild <guild_id>"
+  ops_get "/guilds/${GUILD_ID}/scan?format=text"
+}
+
+set_channel_command() {
+  collect_guild_option "$@"
+  if ((${#REMAINING_ARGS[@]})); then
+    set -- "${REMAINING_ARGS[@]}"
+  else
+    set --
+  fi
+  local field="" cid="" clear="false"
+  while (($#)); do
+    case "$1" in
+      --field) shift; (($#)) || die "missing value for --field"; field="$1" ;;
+      --field=*) field="${1#*=}" ;;
+      --channel-id) shift; (($#)) || die "missing value for --channel-id"; cid="$1" ;;
+      --channel-id=*) cid="${1#*=}" ;;
+      --clear) clear="true" ;;
+      *) die "usage: rob set-channel --guild <id> --field <field> --channel-id <id> | --clear" ;;
+    esac
+    shift || true
+  done
+  [[ -n "$field" ]] || die "usage: rob set-channel --guild <id> --field <field> --channel-id <id> | --clear"
+  if [[ "$clear" == "true" ]]; then
+    ops_post_form "/guilds/${GUILD_ID}/settings/channel?format=text" "field=${field}" "clear=true"
+  else
+    [[ "$cid" =~ ^[0-9]+$ ]] || die "channel id must be numeric (or use --clear)."
+    ops_post_form "/guilds/${GUILD_ID}/settings/channel?format=text" "field=${field}" "channel_id=${cid}"
+  fi
+}
+
+set_role_command() {
+  collect_guild_option "$@"
+  if ((${#REMAINING_ARGS[@]})); then
+    set -- "${REMAINING_ARGS[@]}"
+  else
+    set --
+  fi
+  local field="" rid="" clear="false"
+  while (($#)); do
+    case "$1" in
+      --field) shift; (($#)) || die "missing value for --field"; field="$1" ;;
+      --field=*) field="${1#*=}" ;;
+      --role-id) shift; (($#)) || die "missing value for --role-id"; rid="$1" ;;
+      --role-id=*) rid="${1#*=}" ;;
+      --clear) clear="true" ;;
+      *) die "usage: rob set-role --guild <id> --field <field> --role-id <id> | --clear" ;;
+    esac
+    shift || true
+  done
+  [[ -n "$field" ]] || die "usage: rob set-role --guild <id> --field <field> --role-id <id> | --clear"
+  if [[ "$clear" == "true" ]]; then
+    ops_post_form "/guilds/${GUILD_ID}/settings/role?format=text" "field=${field}" "clear=true"
+  else
+    [[ "$rid" =~ ^[0-9]+$ ]] || die "role id must be numeric (or use --clear)."
+    ops_post_form "/guilds/${GUILD_ID}/settings/role?format=text" "field=${field}" "role_id=${rid}"
+  fi
+}
+
+inactivity_command() {
+  local action="${1:-status}"
+  shift || true
+  collect_guild_option "$@"
+  case "${action}" in
+    status)
+      ops_get "/guilds/${GUILD_ID}/inactivity?format=text"
+      ;;
+    on)
+      ops_post_form "/guilds/${GUILD_ID}/inactivity?format=text" "enabled=true"
+      ;;
+    off)
+      ops_post_form "/guilds/${GUILD_ID}/inactivity?format=text" "enabled=false"
+      ;;
+    backfill)
+      local days=""
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+        while (($#)); do
+          case "$1" in
+            --days) shift; (($#)) || die "missing value for --days"; days="$1" ;;
+            --days=*) days="${1#*=}" ;;
+            *) die "usage: rob inactivity backfill --guild <guild_id> [--days <n>]" ;;
+          esac
+          shift || true
+        done
+      fi
+      if [[ -n "$days" ]]; then
+        [[ "$days" =~ ^[0-9]+$ ]] || die "days must be numeric."
+        ops_post_form "/guilds/${GUILD_ID}/inactivity/backfill?format=text" "days=${days}"
+      else
+        ops_post_form "/guilds/${GUILD_ID}/inactivity/backfill?format=text"
+      fi
+      ;;
+    *)
+      die "usage: rob inactivity on|off|status|backfill --guild <guild_id>"
+      ;;
+  esac
+}
+
+backup_command() {
+  local action="${1:-status}"
+  shift || true
+  collect_guild_option "$@"
+  case "${action}" in
+    status)
+      ops_get "/guilds/${GUILD_ID}/backup?format=text"
+      ;;
+    on)
+      ops_post_form "/guilds/${GUILD_ID}/backup?format=text" "enabled=true"
+      ;;
+    off)
+      ops_post_form "/guilds/${GUILD_ID}/backup?format=text" "enabled=false"
+      ;;
+    run)
+      ops_post_form "/guilds/${GUILD_ID}/backup/run?format=text"
+      ;;
+    *)
+      die "usage: rob backup on|off|status|run --guild <guild_id>"
+      ;;
+  esac
+}
+
+auto_apply_command() {
+  collect_guild_option "$@"
+  if ((${#REMAINING_ARGS[@]})); then
+    set -- "${REMAINING_ARGS[@]}"
+  else
+    set --
+  fi
+  [[ $# -le 1 ]] || die "usage: rob auto-apply --guild <guild_id> [all|channels|roles|field_a,field_b]"
+  local options="${1:-all}"
+  ops_post_form "/guilds/${GUILD_ID}/scan/apply?format=text" "options=${options}"
+}
+
+migration_command() {
+  local action="${1:-}"
+  shift || true
+
+  case "${action}" in
+    audit)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      [[ $# -eq 0 ]] || die "usage: rob migration audit --guild <guild_id>"
+      ops_get "/guilds/${GUILD_ID}/migration/audit?format=text"
+      ;;
+    *)
+      die "usage: rob migration audit --guild <guild_id>"
+      ;;
+  esac
+}
+
+webhook_command() {
+  local action="${1:-}"
+  shift || true
+
+  case "${action}" in
+    preview)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      [[ $# -eq 0 ]] || die "usage: rob webhook preview --guild <guild_id>"
+      ops_get "/guilds/${GUILD_ID}/webhook/reissue/preview?format=text"
+      ;;
+    send)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      local send_all="false"
+      local target_user_id=""
+      local limit=""
+      while (($#)); do
+        case "$1" in
+          --all)
+            send_all="true"
+            ;;
+          --discord-user-id)
+            shift
+            (($#)) || die "missing value for --discord-user-id"
+            target_user_id="$1"
+            ;;
+          --discord-user-id=*)
+            target_user_id="${1#*=}"
+            ;;
+          --limit)
+            shift
+            (($#)) || die "missing value for --limit"
+            limit="$1"
+            ;;
+          --limit=*)
+            limit="${1#*=}"
+            ;;
+          *)
+            die "usage: rob webhook send --guild <guild_id> --all [--limit <n>] | --discord-user-id <id>"
+            ;;
+        esac
+        shift || true
+      done
+      if [[ "${send_all}" != "true" && -z "${target_user_id}" ]]; then
+        die "usage: rob webhook send --guild <guild_id> --all [--limit <n>] | --discord-user-id <id>"
+      fi
+      if [[ -n "${target_user_id}" && ! "${target_user_id}" =~ ^[0-9]+$ ]]; then
+        die "discord user id must be numeric."
+      fi
+      if [[ -n "${limit}" && ! "${limit}" =~ ^[0-9]+$ ]]; then
+        die "limit must be numeric."
+      fi
+      local -a form_args
+      form_args=()
+      if [[ "${send_all}" == "true" ]]; then
+        form_args+=("all=true")
+      fi
+      if [[ -n "${target_user_id}" ]]; then
+        form_args+=("discord_user_id=${target_user_id}")
+      fi
+      if [[ -n "${limit}" ]]; then
+        form_args+=("limit=${limit}")
+      fi
+      ops_post_form "/guilds/${GUILD_ID}/webhook/reissue/send?format=text" "${form_args[@]}"
+      ;;
+    refresh)
+      collect_guild_option "$@"
+      if ((${#REMAINING_ARGS[@]})); then
+        set -- "${REMAINING_ARGS[@]}"
+      else
+        set --
+      fi
+      [[ $# -eq 1 ]] || die "usage: rob webhook refresh <thronehandle> [--guild <guild_id>]"
+      ops_post_form "/guilds/${GUILD_ID}/webhook/reissue/refresh?format=text" "domme_lookup=$1"
+      ;;
+    *)
+      die "usage: rob webhook preview|send|refresh ..."
+      ;;
+  esac
+}
+
+clear_command() {
+  [[ $# -eq 1 ]] || die "usage: rob clear rob_dev_v2"
+  [[ "$1" == "rob_dev_v2" ]] || die "usage: rob clear rob_dev_v2"
+  require_database_url
+
+  local current_db
+  current_db="$(database_name_from_url)"
+  local tables=(
+    send_change_requests
+    achievement_events
+    user_achievements
+    count_blocks
+    count_recovery_windows
+    sub_send_names
+    inactive_users
+    server_backup_approvals
+    server_backups
+    vib_leaderboard
+    sends
+    subs
+    dommes
+    bot_users
+    the_count
+    vib_settings
+    bot_settings
+  )
+
+  print_heading "Rehearsal DB Clear Preview"
+  printf 'Target Database: %s\n' "${current_db}"
+  printf 'Mode: SQL preview only (nothing will be executed)\n'
+  printf 'Schema: preserved\n'
+  printf 'Indexes: preserved\n'
+  printf 'db_build_version: preserved\n'
+  printf 'Intended Database: rob_dev_v2\n'
+  if [[ "${current_db}" != "rob_dev_v2" ]]; then
+    printf 'WARNING: DATABASE_URL currently points at %s, not rob_dev_v2.\n' "${current_db}"
+  fi
+  printf '\nRows that would be cleared\n'
+  printf '%s\n' '========================='
+  local table
+  for table in "${tables[@]}"; do
+    local count
+    count="$(psql_query "SELECT COUNT(*) FROM ${table}")"
+    printf -- '- %s: %s\n' "${table}" "${count:-0}"
+  done
+  printf '\nSQL to run manually as doadmin\n'
+  printf '%s\n' '============================='
+  cat <<'EOF'
+-- Rehearsal DB only.
+-- Preserves schema, indexes, and db_build_version.
+-- Review before running. Do not use this on prod.
+TRUNCATE TABLE
+    send_change_requests,
+    achievement_events,
+    user_achievements,
+    count_blocks,
+    count_recovery_windows,
+    sub_send_names,
+    inactive_users,
+    server_backup_approvals,
+    server_backups,
+    vib_leaderboard,
+    sends,
+    subs,
+    dommes,
+    bot_users,
+    the_count,
+    vib_settings,
+    bot_settings
+RESTART IDENTITY CASCADE;
+EOF
+}
+
+maintenance_command() {
+  local action="${1:-status}"
+  shift || true
+
+  case "${action}" in
+    status)
+      ops_get "/maintenance?format=text"
+      ;;
+    on)
+      local reason="Enabled via rob CLI"
+      if (($#)); then
+        reason="$*"
+      fi
+      ops_post_form "/maintenance?format=text" "enabled=true" "reason=${reason}"
+      ;;
+    off)
+      ops_post_form "/maintenance?format=text" "enabled=false"
+      ;;
+    *)
+      die "usage: rob maintenance on|off|status"
+      ;;
+  esac
+}
+
+offline_command() {
+  local action="${1:-status}"
+  shift || true
+
+  case "${action}" in
+    status)
+      ops_get "/rob-offline?format=text"
+      ;;
+    on)
+      ops_post_form "/rob-offline?format=text" "enabled=true"
+      ;;
+    off)
+      ops_post_form "/rob-offline?format=text" "enabled=false"
+      ;;
+    *)
+      die "usage: rob offline on|off|status"
+      ;;
+  esac
+}
+
+block_command() {
+  [[ $# -eq 1 ]] || die "usage: rob block <discord_user_id>"
+  [[ "$1" =~ ^[0-9]+$ ]] || die "discord_user_id must be numeric."
+  ops_post_form "/block?format=text" "discord_user_id=$1" "reason=blocked via rob CLI"
+}
+
+unblock_command() {
+  [[ $# -eq 1 ]] || die "usage: rob unblock <discord_user_id>"
+  [[ "$1" =~ ^[0-9]+$ ]] || die "discord_user_id must be numeric."
+  ops_post_form "/unblock?format=text" "discord_user_id=$1"
+}
+
+restart_command() {
+  command -v systemctl >/dev/null 2>&1 || die "systemctl is not available on this machine."
+  services_for_target "${1:-all}"
+  require_cmd sudo
+  sudo systemctl restart "${SERVICE_TARGETS[@]}"
+  sudo systemctl is-active "${SERVICE_TARGETS[@]}"
+}
+
+logs_command() {
+  command -v journalctl >/dev/null 2>&1 || die "journalctl is not available on this machine."
+  services_for_target "${1:-all}"
+  local -a args
+  args=()
+  for service_name in "${SERVICE_TARGETS[@]}"; do
+    args+=(-u "${service_name}")
+  done
+  exec journalctl "${args[@]}" -n "${ROB_LOG_LINES}" -f
+}
+
+fix_me_command() {
+  local script="${APP_ROOT}/deploy/scripts/fix-me.sh"
+  [[ -f "${script}" ]] || die "fix-me script not found at ${script}"
+  exec bash "${script}" "$@"
+}
+
+status_command() {
+  print_heading "Rob Status"
+
+  local ops_url
+  ops_url="$(resolve_ops_base_url)"
+  printf 'Ops base URL: %s\n' "${ops_url}"
+
+  if [[ -n "${DATABASE_URL:-}" ]]; then
+    printf 'Database:     %s\n' "$(database_name_from_url)"
+  else
+    printf 'Database:     (DATABASE_URL not set)\n'
+  fi
+
+  local guild
+  guild="$(autodetect_guild_id)"
+  if [[ -n "${guild}" ]]; then
+    printf 'Guild:        %s (auto-detected)\n' "${guild}"
+  else
+    printf 'Guild:        (none / multiple — pass --guild)\n'
+  fi
+
+  printf '\nBot ops /health: '
+  if command -v curl >/dev/null 2>&1; then
+    local -a args
+    args=(-fsS --connect-timeout 5)
+    if [[ -n "${ROB_OPS_SECRET:-}" ]]; then
+      args+=(-H "X-Rob-Ops-Secret: ${ROB_OPS_SECRET}")
+    fi
+    if curl "${args[@]}" "${ops_url}/health" >/dev/null 2>&1; then
+      printf 'ok\n'
+    else
+      printf 'unreachable\n'
+    fi
+  else
+    printf '(curl not available)\n'
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    local printed_header=""
+    local svc
+    for svc in "${ROB_BOT_SERVICE}" "${ROB_WEBHOOK_SERVICE}"; do
+      if systemctl cat "${svc}" >/dev/null 2>&1; then
+        if [[ -z "${printed_header}" ]]; then
+          printf '\nServices:\n'
+          printed_header="yes"
+        fi
+        printf '  %-20s %s\n' "${svc}" "$(systemctl is-active "${svc}" 2>/dev/null || echo unknown)"
+      fi
+    done
+  fi
+}
+
+cmd="${1:-}"
+[[ -n "${cmd}" ]] || {
+  usage
+  exit 0
+}
+shift || true
+
+case "${cmd}" in
+  help|--help|-h)
+    usage
+    ;;
+  dommes)
+    dommes_command "$@"
+    ;;
+  subs)
+    subs_command "$@"
+    ;;
+  sends)
+    sends_lookup_command "$@"
+    ;;
+  send)
+    send_command "$@"
+    ;;
+  count)
+    count_command "$@"
+    ;;
+  scan)
+    scan_command "$@"
+    ;;
+  auto-apply)
+    auto_apply_command "$@"
+    ;;
+  set-channel)
+    set_channel_command "$@"
+    ;;
+  set-role)
+    set_role_command "$@"
+    ;;
+  inactivity)
+    inactivity_command "$@"
+    ;;
+  backup)
+    backup_command "$@"
+    ;;
+  migration)
+    migration_command "$@"
+    ;;
+  webhook)
+    webhook_command "$@"
+    ;;
+  clear)
+    clear_command "$@"
+    ;;
+  block)
+    block_command "$@"
+    ;;
+  unblock)
+    unblock_command "$@"
+    ;;
+  restart)
+    restart_command "$@"
+    ;;
+  maintenance)
+    maintenance_command "$@"
+    ;;
+  offline)
+    offline_command "$@"
+    ;;
+  logs)
+    logs_command "$@"
+    ;;
+  status)
+    status_command "$@"
+    ;;
+  fix-me)
+    fix_me_command "$@"
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac

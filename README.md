@@ -1,10 +1,16 @@
-# Bill
+# Rob Dev Rebuild
 
+<<<<<<< HEAD
 Bill is a multi-server Discord bot with durable member profiles and verified
 Throne send tracking.
+=======
+Rob is being rebuilt as two separate services that share PostgreSQL:
+>>>>>>> parent of a3023d4 (Rebuild Bill send tracking)
 
-## Architecture
+- `apps/webhook` receives Throne webhooks and writes sends to PostgreSQL.
+- `apps/bot` runs the Discord bot, posts queued sends, refreshes leaderboards, and handles user commands.
 
+<<<<<<< HEAD
 - **Discord bot:** Python 3.12 on DigitalOcean. Members use `/profile`; server
   administrators configure the send channel with `/bill setup`.
 - **Webhook and data API:** native TypeScript Cloudflare Worker at
@@ -50,3 +56,6 @@ signed/idempotent Throne ingestion, D1 persistence, and leased notifications.
 
 Leaderboards, reports, moderation, manual sends, support tooling, diagnostics
 commands, and a website remain out of scope.
+=======
+The legacy single-process bot is preserved under [`archive/single-process-bot`](archive/single-process-bot) for behavioural reference only. It is not part of the active runtime.
+>>>>>>> parent of a3023d4 (Rebuild Bill send tracking)

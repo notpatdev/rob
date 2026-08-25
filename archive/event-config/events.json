@@ -1,0 +1,26 @@
+{
+  "default_theme": {
+    "key": "default",
+    "name": "Default",
+    "emoji": "🏆",
+    "accent_color": "purple",
+    "leaderboard_title": "Leaderboard",
+    "send_title": "New Send, Who dis?"
+  },
+  "events": [
+    {
+      "key": "mothers_day_2026",
+      "name": "Mother's Day Event",
+      "theme": {
+        "emoji": "🌸",
+        "accent_color": "pink",
+        "leaderboard_title": "Mother's Day Event",
+        "send_title": "A motherly send"
+      },
+      "enabled": false,
+      "start_at": "2026-05-09T14:00:00Z",
+      "end_at": "2026-05-10T14:00:00Z",
+      "timezone": "UTC"
+    }
+  ]
+}

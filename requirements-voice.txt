@@ -1,0 +1,5 @@
+# Optional dependency for the voice-message transcription feature (bot only).
+# Install on the bot host when VOICE_TRANSCRIBE_ENABLED=true:
+#   pip install -r requirements-voice.txt
+# Runs a local Whisper model (CTranslate2) on CPU — no GPU or external API.
+faster-whisper>=1.0,<2

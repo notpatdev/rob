@@ -1,0 +1,297 @@
+name: Deploy Rob Codebase
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      deploy_ref:
+        description: "Branch, tag, or commit SHA to deploy"
+        required: false
+        default: "main"
+      deploy_bot:
+        description: "Deploy bot service"
+        required: true
+        default: true
+        type: boolean
+      deploy_webhook:
+        description: "Deploy webhook service"
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: deploy-rob-codebase-prod
+  cancel-in-progress: false
+
+jobs:
+  resolve_deploy_context:
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_env: ${{ steps.resolve.outputs.deploy_env }}
+      deploy_ref: ${{ steps.resolve.outputs.deploy_ref }}
+      deploy_bot: ${{ steps.resolve.outputs.deploy_bot }}
+      deploy_webhook: ${{ steps.resolve.outputs.deploy_webhook }}
+    steps:
+      - id: resolve
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_SHA: ${{ github.sha }}
+          INPUT_DEPLOY_REF: ${{ inputs.deploy_ref }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_DEPLOY_BOT: ${{ inputs.deploy_bot }}
+          INPUT_DEPLOY_WEBHOOK: ${{ inputs.deploy_webhook }}
+        run: |
+          set -Eeuo pipefail
+
+          normalize_bool() {
+            local value="${1:-}"
+            value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+            case "$value" in
+              true|1|yes|y|on) echo "true" ;;
+              *) echo "false" ;;
+            esac
+          }
+
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            deploy_env="prod"
+            deploy_ref="$PUSH_SHA"
+            deploy_bot="true"
+            deploy_webhook="true"
+          else
+            deploy_env="prod"
+            deploy_ref="${INPUT_DEPLOY_REF:-main}"
+            if [[ -z "$deploy_ref" ]]; then
+              deploy_ref="main"
+            fi
+            deploy_bot="$(normalize_bool "${INPUT_DEPLOY_BOT:-true}")"
+            deploy_webhook="$(normalize_bool "${INPUT_DEPLOY_WEBHOOK:-true}")"
+          fi
+
+          echo "deploy_env=${deploy_env}" >> "$GITHUB_OUTPUT"
+          echo "deploy_ref=${deploy_ref}" >> "$GITHUB_OUTPUT"
+          echo "deploy_bot=${deploy_bot}" >> "$GITHUB_OUTPUT"
+          echo "deploy_webhook=${deploy_webhook}" >> "$GITHUB_OUTPUT"
+
+  precheck_codebase:
+    needs: [resolve_deploy_context]
+    runs-on: ubuntu-latest
+    name: Check | Codebase (PROD)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve_deploy_context.outputs.deploy_ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: PYTHONPATH=. python -m compileall apps rob ops
+      - run: ruff check .
+      - run: PYTHONPATH=. python -m pytest -q
+      - run: |
+          test -f deploy/scripts/deploy-bot.sh
+          test -f deploy/scripts/deploy-webhook.sh
+          test -f deploy/scripts/precheck-bot.sh
+          test -f deploy/scripts/precheck-webhook.sh
+          test -f ops/checks/check_db.py
+
+  bot_server_precheck:
+    if: ${{ needs.resolve_deploy_context.outputs.deploy_bot == 'true' }}
+    needs: [resolve_deploy_context, precheck_codebase]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve_deploy_context.outputs.deploy_env }}
+    name: Check | Bot (PROD)
+    steps:
+      - name: Bot precheck over SSH (prod)
+        if: ${{ needs.resolve_deploy_context.outputs.deploy_env == 'prod' }}
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ROB_PROD_BOT_HOST }}
+          username: ${{ secrets.ROB_PROD_BOT_USER }}
+          key: ${{ secrets.ROB_PROD_BOT_SSH_KEY }}
+          port: ${{ secrets.ROB_PROD_BOT_SSH_PORT != '' && secrets.ROB_PROD_BOT_SSH_PORT || '22' }}
+          script: |
+            set -Eeuo pipefail
+            cd /opt/rob-bot/app
+            deploy_ref='${{ needs.resolve_deploy_context.outputs.deploy_ref }}'
+            run_git() {
+              if git "$@"; then
+                return 0
+              fi
+              if command -v sudo >/dev/null 2>&1; then
+                echo "Git command failed as $(id -un); retrying with sudo."
+                sudo -n git "$@"
+                return $?
+              fi
+              return 1
+            }
+            run_git fetch origin --prune main || true
+            if ! run_git fetch origin "${deploy_ref}"; then
+              echo "ERROR: Could not fetch deploy ref ${deploy_ref} to refresh precheck scripts."
+              exit 1
+            fi
+            if ! run_git checkout FETCH_HEAD -- deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh ops/checks/check_db.py rob/config/settings.py db/build; then
+              echo "ERROR: Could not load precheck scripts from deploy ref ${deploy_ref}."
+              exit 1
+            fi
+            chmod +x deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh
+            if [[ -x ./deploy/scripts/precheck-bot.sh ]]; then
+              SERVICE_NAME='rob-bot.service' APP_DIR=/opt/rob-bot/app ./deploy/scripts/precheck-bot.sh
+            else
+              echo "precheck-bot.sh is not present yet. Running bootstrap-safe fallback checks."
+              test -d .git
+              test -f .env
+              test -x .venv/bin/python
+              systemctl list-unit-files 'rob-bot.service' >/dev/null 2>&1
+              grep -Eq '^[[:space:]]*DATABASE_URL=' .env
+              grep -Eq '^[[:space:]]*DISCORD_TOKEN=' .env
+              grep -Eq '^[[:space:]]*BOT_NAME=' .env
+              echo "Skipping DB schema check in bootstrap fallback. Full DB check runs in deploy-bot.sh."
+              systemctl is-active 'rob-bot.service' || true
+            fi
+
+  webhook_server_precheck:
+    if: ${{ needs.resolve_deploy_context.outputs.deploy_webhook == 'true' }}
+    needs: [resolve_deploy_context, precheck_codebase]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve_deploy_context.outputs.deploy_env }}
+    name: Check | Webhook (PROD)
+    steps:
+      - name: Webhook precheck over SSH (prod)
+        if: ${{ needs.resolve_deploy_context.outputs.deploy_env == 'prod' }}
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ROB_PROD_WEBHOOK_HOST }}
+          username: ${{ secrets.ROB_PROD_WEBHOOK_USER }}
+          key: ${{ secrets.ROB_PROD_WEBHOOK_SSH_KEY }}
+          port: ${{ secrets.ROB_PROD_WEBHOOK_SSH_PORT != '' && secrets.ROB_PROD_WEBHOOK_SSH_PORT || '22' }}
+          script: |
+            set -Eeuo pipefail
+            cd /opt/rob-webhook/app
+            deploy_ref='${{ needs.resolve_deploy_context.outputs.deploy_ref }}'
+            run_git() {
+              if git "$@"; then
+                return 0
+              fi
+              if command -v sudo >/dev/null 2>&1; then
+                echo "Git command failed as $(id -un); retrying with sudo."
+                sudo -n git "$@"
+                return $?
+              fi
+              return 1
+            }
+            run_git fetch origin --prune main || true
+            if ! run_git fetch origin "${deploy_ref}"; then
+              echo "ERROR: Could not fetch deploy ref ${deploy_ref} to refresh precheck scripts."
+              exit 1
+            fi
+            if ! run_git checkout FETCH_HEAD -- deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh ops/checks/check_db.py rob/config/settings.py db/build; then
+              echo "ERROR: Could not load precheck scripts from deploy ref ${deploy_ref}."
+              exit 1
+            fi
+            chmod +x deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh
+            if [[ -x ./deploy/scripts/precheck-webhook.sh ]]; then
+              SERVICE_NAME='rob-webhook.service' APP_DIR=/opt/rob-webhook/app HEALTH_URL=http://127.0.0.1:8080/health ./deploy/scripts/precheck-webhook.sh
+            else
+              echo "precheck-webhook.sh is not present yet. Running bootstrap-safe fallback checks."
+              test -d .git
+              test -f .env
+              test -x .venv/bin/python
+              systemctl list-unit-files 'rob-webhook.service' >/dev/null 2>&1
+              grep -Eq '^[[:space:]]*DATABASE_URL=' .env
+              grep -Eq '^[[:space:]]*THRONE_WEBHOOK_HOST=' .env
+              grep -Eq '^[[:space:]]*THRONE_WEBHOOK_PORT=' .env
+              echo "Skipping DB schema check in bootstrap fallback. Full DB check runs in deploy-webhook.sh."
+              state="$(systemctl is-active 'rob-webhook.service' || true)"
+              echo "$state"
+              if [[ "$state" == "active" ]]; then
+                curl -fsS http://127.0.0.1:8080/health >/dev/null
+              fi
+            fi
+            
+  deploy_bot:
+    if: ${{ needs.resolve_deploy_context.outputs.deploy_bot == 'true' }}
+    needs: [resolve_deploy_context, precheck_codebase, bot_server_precheck]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve_deploy_context.outputs.deploy_env }}
+    name: Deploy | Bot (PROD)
+    steps:
+      - name: Deploy bot over SSH (prod)
+        if: ${{ needs.resolve_deploy_context.outputs.deploy_env == 'prod' }}
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ROB_PROD_BOT_HOST }}
+          username: ${{ secrets.ROB_PROD_BOT_USER }}
+          key: ${{ secrets.ROB_PROD_BOT_SSH_KEY }}
+          port: ${{ secrets.ROB_PROD_BOT_SSH_PORT != '' && secrets.ROB_PROD_BOT_SSH_PORT || '22' }}
+          script: |
+            set -Eeuo pipefail
+            cd /opt/rob-bot/app
+            deploy_ref='${{ needs.resolve_deploy_context.outputs.deploy_ref }}'
+            run_git() {
+              if git "$@"; then
+                return 0
+              fi
+              if command -v sudo >/dev/null 2>&1; then
+                echo "Git command failed as $(id -un); retrying with sudo."
+                sudo -n git "$@"
+                return $?
+              fi
+              return 1
+            }
+            run_git fetch origin --prune main || true
+            if ! run_git fetch origin "${deploy_ref}"; then
+              echo "ERROR: Could not fetch deploy ref ${deploy_ref} to refresh deploy scripts."
+              exit 1
+            fi
+            if ! run_git checkout FETCH_HEAD -- deploy/scripts/deploy-bot.sh deploy/scripts/deploy-webhook.sh deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh ops/checks/check_db.py rob/config/settings.py db/build; then
+              echo "ERROR: Could not load deploy scripts from deploy ref ${deploy_ref}."
+              exit 1
+            fi
+            chmod +x deploy/scripts/deploy-bot.sh deploy/scripts/deploy-webhook.sh deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh
+            DEPLOY_BRANCH=main DEPLOY_REF="${deploy_ref}" SERVICE_NAME='rob-bot.service' APP_DIR=/opt/rob-bot/app ./deploy/scripts/deploy-bot.sh
+
+  deploy_webhook:
+    if: ${{ needs.resolve_deploy_context.outputs.deploy_webhook == 'true' }}
+    needs: [resolve_deploy_context, precheck_codebase, webhook_server_precheck]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve_deploy_context.outputs.deploy_env }}
+    name: Deploy | Webhook (PROD)
+    steps:
+      - name: Deploy webhook over SSH (prod)
+        if: ${{ needs.resolve_deploy_context.outputs.deploy_env == 'prod' }}
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ROB_PROD_WEBHOOK_HOST }}
+          username: ${{ secrets.ROB_PROD_WEBHOOK_USER }}
+          key: ${{ secrets.ROB_PROD_WEBHOOK_SSH_KEY }}
+          port: ${{ secrets.ROB_PROD_WEBHOOK_SSH_PORT != '' && secrets.ROB_PROD_WEBHOOK_SSH_PORT || '22' }}
+          script: |
+            set -Eeuo pipefail
+            cd /opt/rob-webhook/app
+            deploy_ref='${{ needs.resolve_deploy_context.outputs.deploy_ref }}'
+            run_git() {
+              if git "$@"; then
+                return 0
+              fi
+              if command -v sudo >/dev/null 2>&1; then
+                echo "Git command failed as $(id -un); retrying with sudo."
+                sudo -n git "$@"
+                return $?
+              fi
+              return 1
+            }
+            run_git fetch origin --prune main || true
+            if ! run_git fetch origin "${deploy_ref}"; then
+              echo "ERROR: Could not fetch deploy ref ${deploy_ref} to refresh deploy scripts."
+              exit 1
+            fi
+            if ! run_git checkout FETCH_HEAD -- deploy/scripts/deploy-bot.sh deploy/scripts/deploy-webhook.sh deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh ops/checks/check_db.py rob/config/settings.py db/build; then
+              echo "ERROR: Could not load deploy scripts from deploy ref ${deploy_ref}."
+              exit 1
+            fi
+            chmod +x deploy/scripts/deploy-bot.sh deploy/scripts/deploy-webhook.sh deploy/scripts/precheck-bot.sh deploy/scripts/precheck-webhook.sh
+            DEPLOY_BRANCH=main DEPLOY_REF="${deploy_ref}" SERVICE_NAME='rob-webhook.service' APP_DIR=/opt/rob-webhook/app HEALTH_URL=http://127.0.0.1:8080/health ./deploy/scripts/deploy-webhook.sh
